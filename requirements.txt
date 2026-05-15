@@ -1,0 +1,5 @@
+# required — HCL2 parser for .tf files (mandatory, no fallback)
+python-hcl2>=4.3.0
+
+# required for --live mode (AWS live state comparison)
+boto3>=1.34.0

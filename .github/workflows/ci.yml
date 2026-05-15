@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: terraform_evaluator
+        run: pip install -r requirements.txt pytest
+
+      - name: Run tests
+        working-directory: terraform_evaluator
+        run: pytest tests/ -v
+
+  evaluate-sample:
+    name: Evaluate sample fixtures
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: terraform_evaluator
+        run: pip install -r requirements.txt
+
+      - name: Evaluate well-configured fixture (expect score >= 80)
+        working-directory: terraform_evaluator
+        run: |
+          python main.py --dir tests/fixtures/sample_good --min-severity HIGH
+          echo "Exit code: $?"
+
+      - name: Evaluate misconfigured fixture (expect findings)
+        working-directory: terraform_evaluator
+        run: |
+          python main.py --dir tests/fixtures/sample_bad --min-severity MEDIUM || true
+          echo "Misconfigured fixture scan complete"
+
+      - name: Generate HTML report for sample_bad
+        working-directory: terraform_evaluator
+        run: python main.py --dir tests/fixtures/sample_bad --output-html /tmp/sample_bad.html
+
+      - name: Upload HTML report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sample-bad-report
+          path: /tmp/sample_bad.html
+          retention-days: 7
+
+  lint:
+    name: Code quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Lint (errors only, no style enforcement)
+        working-directory: terraform_evaluator
+        run: flake8 main.py hcl_parser.py evaluator.py reference.py --max-line-length=120 --select=E9,F821,F401

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Generated reports (never commit generated output)
+*.html
+report.json
+*.tfstate
+*.tfstate.backup
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+
+# Dev utility (use scripts/count_rules.py instead)
+_count.py
+
+# Cloned test repos (local dev only)
+terraform-aws-ecs-service/
+learn-terraform-aws-asg/
+
+# AWS credentials (never commit)
+.env
+.aws/
+
+# OS
+.DS_Store
+Thumbs.db
