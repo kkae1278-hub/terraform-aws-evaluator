@@ -1,6 +1,6 @@
 # Terraform AWS Best-Practice Evaluator
 
-![CI](https://github.com/kkae0/terraform-aws-evaluator/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/kkae1278-hub/terraform-aws-evaluator/actions/workflows/ci.yml/badge.svg)
 
 Terraform の `.tf` ファイルを静的解析し、AWS のベストプラクティスと照合して問題点をスコアリングするツールです。生成 AI は使用せず、ルールベースの評価エンジンと boto3 による実環境比較で動作します。
 
