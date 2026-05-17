@@ -34,7 +34,6 @@ terraform_evaluator/
 |---|---|
 | Python | 3.8 以上 |
 | python-hcl2 | 4.3.0 以上（**必須**） |
-| boto3 | 1.34.0 以上（`--live` 使用時のみ必須） |
 
 ## セットアップ
 
@@ -51,7 +50,6 @@ pip install -r requirements-dev.txt
 | ライブラリ | 必須 | 用途 |
 |---|---|---|
 | `python-hcl2` | **必須** | HCL2 形式の `.tf` ファイルのパース。未インストールの場合はエラーで終了 |
-| `boto3` | `--live` 時のみ | AWS API による実環境との照合 |
 | `pytest` | テスト時のみ | ユニットテスト・フィクスチャ評価 |
 
 > **注意:** `python-hcl2` は必須依存ライブラリです。以前あった正規表現フォールバックパーサーは削除されました。
@@ -65,18 +63,6 @@ pip install -r requirements-dev.txt
 
 ```bash
 python main.py --dir path/to/terraform
-```
-
-### AWS 実環境との照合あり
-
-```bash
-python main.py --dir path/to/terraform --live --region ap-northeast-1
-```
-
-### AWS プロファイルを指定する場合
-
-```bash
-python main.py --dir path/to/terraform --live --region ap-northeast-1 --profile myprofile
 ```
 
 ### JSON レポートとして保存
@@ -103,9 +89,6 @@ python main.py --dir path/to/terraform --min-severity HIGH
 | オプション | デフォルト | 説明 |
 |---|---|---|
 | `--dir` | `../terraform` | 評価対象の Terraform ディレクトリ |
-| `--live` | 無効 | boto3 で AWS 実環境と照合する |
-| `--region` | `ap-northeast-1` | AWS リージョン（`--live` 時に使用） |
-| `--profile` | なし（環境変数の認証情報を使用） | AWS CLI プロファイル名 |
 | `--output` | なし | JSON レポートの出力先ファイルパス |
 | `--output-html` | なし | HTML レポートの出力先ファイルパス |
 | `--min-severity` | `LOW` | 表示する最低重大度 |
@@ -153,24 +136,6 @@ AWS Well-Architected Framework の 5 つの柱（SEC / REL / OPS / PERF / COST�
 | CI/CD | CodeBuild, CodePipeline, CodeDeploy |
 | サーバーレス | Lambda, Step Functions, API Gateway |
 | その他 | OpenSearch, ACM, SSM, Route53, VPN |
-
----
-
-## AWS 実環境照合（`--live` モード）
-
-boto3 を使用して実際に AWS API を呼び出し、Terraform 定義との差異（ドリフト）や実環境の設定不備を検出します。
-
-| サービス | チェック内容 |
-|---|---|
-| EC2 | IMDSv2 の状態、詳細モニタリングの状態 |
-| RDS | Multi-AZ、削除保護、Enhanced Monitoring、Performance Insights |
-| ALB | 削除保護、HTTPS リスナーの有無 |
-| Security Group | 0.0.0.0/0 による管理/DB ポートの公開 |
-| CloudTrail | ログ検証の有効化、KMS 暗号化 |
-| GuardDuty | ディテクターの存在確認 |
-| S3 | パブリックアクセスブロックの完全設定 |
-
-実環境で検出された問題には `[LIVE]` タグが付き、Terraform 定義上の問題（`[STATIC]`）と区別できます。
 
 ---
 

@@ -350,7 +350,6 @@ class TestEvaluateStatic:
         assert ec2_finding.resource_type == "aws_instance"
         assert ec2_finding.resource_name == "my_server"
         assert ec2_finding.severity == "HIGH"
-        assert ec2_finding.source == "static"
         assert ec2_finding.description
         assert ec2_finding.message
         assert ec2_finding.recommendation

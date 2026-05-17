@@ -3,8 +3,8 @@ Terraform AWS Best-Practice Evaluator
 --------------------------------------
 Usage:
   python main.py --dir ../terraform
-  python main.py --dir ../terraform --live --region ap-northeast-1
-  python main.py --dir ../terraform --live --profile myprofile --output report.json
+  python main.py --dir ../terraform --output report.json
+  python main.py --dir ../terraform --output-html report.html
 """
 
 import argparse
@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from hcl_parser import parse_tf_directory
-from evaluator import evaluate_static, compare_live, generate_report, generate_html_report
+from evaluator import evaluate_static, generate_report, generate_html_report
 
 
 def main():
@@ -27,21 +27,6 @@ def main():
         "--dir",
         default="../terraform",
         help="Path to the Terraform directory (default: ../terraform)",
-    )
-    parser.add_argument(
-        "--live",
-        action="store_true",
-        help="Also compare against live AWS state via boto3",
-    )
-    parser.add_argument(
-        "--region",
-        default="ap-northeast-1",
-        help="AWS region for live checks (default: ap-northeast-1)",
-    )
-    parser.add_argument(
-        "--profile",
-        default=None,
-        help="AWS CLI profile name (default: use environment credentials)",
     )
     parser.add_argument(
         "--output",
@@ -85,12 +70,6 @@ def main():
     result = evaluate_static(resources)
     print(f"  Static findings: {len(result.findings)}")
     print()
-
-    # ── Live AWS comparison ───────────────────────
-    if args.live:
-        print(f"Connecting to AWS ({args.region})...")
-        compare_live(result, resources, region=args.region, profile=args.profile)
-        print()
 
     # ── Filter by severity ────────────────────────
     severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
