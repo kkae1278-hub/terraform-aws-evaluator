@@ -1338,7 +1338,7 @@ storage:
         op: eq
         field: type
         value: gp3
-        default: gp3
+        default: gp2
 
   aws_kinesis_stream:
     - id: KIN-001
@@ -1364,6 +1364,7 @@ storage:
         op: gte
         field: retention_period
         value: 24
+        default: 24
 
     - id: KIN-003
       pillar: OPS
@@ -1583,6 +1584,7 @@ security:
         op: gte
         field: recovery_window_in_days
         value: 7
+        default: 30
 
     - id: SM-002
       pillar: SEC

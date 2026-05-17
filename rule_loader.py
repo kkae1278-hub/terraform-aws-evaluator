@@ -76,15 +76,18 @@ def _resolve_check(spec: dict):
 
     if op == "gte":
         f, v = spec["field"], int(spec["value"])
-        return lambda c, f=f, v=v: _int(c, f) >= v
+        d = int(spec["default"]) if "default" in spec else 0
+        return lambda c, f=f, v=v, d=d: _int(c, f, d) >= v
 
     if op == "gt":
         f, v = spec["field"], int(spec["value"])
-        return lambda c, f=f, v=v: _int(c, f) > v
+        d = int(spec["default"]) if "default" in spec else 0
+        return lambda c, f=f, v=v, d=d: _int(c, f, d) > v
 
     if op == "lte":
         f, v = spec["field"], int(spec["value"])
-        return lambda c, f=f, v=v: _int(c, f) <= v
+        d = int(spec["default"]) if "default" in spec else 0
+        return lambda c, f=f, v=v, d=d: _int(c, f, d) <= v
 
     if op == "has_key":
         f = spec["field"]
