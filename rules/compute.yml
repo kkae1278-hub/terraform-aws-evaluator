@@ -1,0 +1,227 @@
+# compute rules
+resources:
+  aws_instance:
+    - id: EC2-001
+      pillar: SEC
+      severity: HIGH
+      description: "IMDSv2 (http_tokens=required) must be enforced"
+      message: "IMDSv2 is not required. http_tokens != 'required' exposes the instance to SSRF-based metadata theft."
+      recommendation: "Set metadata_options { http_tokens = \"required\" http_put_response_hop_limit = 1 }"
+      check:
+        op: block_eq
+        block: metadata_options
+        field: http_tokens
+        value: required
+
+    - id: EC2-002
+      pillar: SEC
+      severity: HIGH
+      description: "Root EBS volume must be encrypted at rest"
+      message: "Root EBS volume is not encrypted at rest. Violates SEC05 (protect data at rest)."
+      recommendation: "Set root_block_device { encrypted = true }"
+      check:
+        op: block_is_true
+        block: root_block_device
+        field: encrypted
+
+    - id: EC2-003
+      pillar: OPS
+      severity: MEDIUM
+      description: "Detailed (1-minute) CloudWatch monitoring should be enabled"
+      message: "Detailed monitoring is disabled. Default 5-minute intervals reduce alerting granularity."
+      recommendation: "Set monitoring = true"
+      check:
+        op: is_true
+        field: monitoring
+
+    - id: EC2-004
+      pillar: COST
+      severity: LOW
+      description: "EBS root volume type should be gp3"
+      message: "Root EBS volume is not gp3 (default is gp2). gp3 costs 20% less than gp2 with higher baseline throughput."
+      recommendation: "Set root_block_device { volume_type = \"gp3\" }"
+      check:
+        op: block_eq
+        block: root_block_device
+        field: volume_type
+        value: gp3
+        default: gp2
+
+    - id: EC2-005
+      pillar: SEC
+      severity: MEDIUM
+      description: "EC2 instance should not have a public IP (prefer private subnet + NAT/VPC Endpoint)"
+      message: "associate_public_ip_address = true. Instance is directly reachable from the internet."
+      recommendation: "Place instance in a private subnet and use NAT Gateway or VPC Endpoints for outbound access."
+      check:
+        op: not_true
+        field: associate_public_ip_address
+
+    - id: EC2-006
+      pillar: REL
+      severity: LOW
+      description: "EBS volume delete_on_termination should be explicit"
+      message: "delete_on_termination is not explicitly set. Default (true) may cause unexpected data loss on termination."
+      recommendation: "Explicitly set root_block_device { delete_on_termination = false } for data volumes."
+      check:
+        op: block_has_key
+        block: root_block_device
+        field: delete_on_termination
+
+    - id: EC2-007
+      pillar: PERF
+      severity: LOW
+      description: "Avoid previous-generation instance types (t2, m3, c3, r3)"
+      message: "Previous-generation instance type detected. Newer generations offer better performance per cost."
+      recommendation: "Migrate to t3/t4g, m5/m6i, c5/c6i or equivalent current-generation types."
+      check:
+        op: not_startswith
+        field: instance_type
+        default: ""
+        prefixes:
+          - "t2."
+          - "m3."
+          - "c3."
+          - "r3."
+          - "i2."
+
+  aws_autoscaling_group:
+    - id: ASG-001
+      pillar: REL
+      severity: MEDIUM
+      description: "Health check type should be ELB (not EC2) when behind a load balancer"
+      message: "health_check_type = EC2. EC2 checks only detect OS-level failure, not application failure."
+      recommendation: "Set health_check_type = \"ELB\" when instances are behind an ALB/NLB"
+      check:
+        op: eq
+        field: health_check_type
+        value: ELB
+        default: EC2
+
+    - id: ASG-002
+      pillar: REL
+      severity: MEDIUM
+      description: "Minimum instance count should be >= 2 for high availability"
+      message: "min_size < 2. A single-instance ASG has no redundancy — one AZ failure takes down the service."
+      recommendation: "Set min_size >= 2 and use multiple availability_zones"
+      check:
+        op: gte
+        field: min_size
+        value: 2
+
+    - id: ASG-003
+      pillar: REL
+      severity: HIGH
+      description: "ASG should span multiple Availability Zones"
+      message: "ASG is configured for a single AZ. One AZ outage removes all capacity."
+      recommendation: "Set vpc_zone_identifier to subnets in at least 2 AZs"
+      check:
+        op: fn
+        name: asg_multi_az
+
+    - id: ASG-004
+      pillar: REL
+      severity: LOW
+      description: "Instance refresh should be configured for safe deployments"
+      message: "No instance_refresh block. AMI updates replace all instances simultaneously without health checks."
+      recommendation: "Add instance_refresh { strategy = \"Rolling\" preferences { min_healthy_percentage = 90 } }"
+      check:
+        op: has_key
+        field: instance_refresh
+
+    - id: ASG-005
+      pillar: COST
+      severity: INFO
+      description: "Consider using mixed instances policy with Spot for cost savings"
+      message: "Using On-Demand only. Mixed instances policy with Spot can reduce EC2 costs by 60-90%."
+      recommendation: "Evaluate mixed_instances_policy with Spot for non-critical workloads."
+      check:
+        op: fn
+        name: always_false
+
+  aws_launch_template:
+    - id: LT-001
+      pillar: SEC
+      severity: HIGH
+      description: "Launch template should enforce IMDSv2"
+      message: "Launch template does not enforce IMDSv2. Instances launched from this template are vulnerable to SSRF."
+      recommendation: "Set metadata_options { http_tokens = \"required\" http_put_response_hop_limit = 1 }"
+      check:
+        op: block_eq
+        block: metadata_options
+        field: http_tokens
+        value: required
+
+    - id: LT-002
+      pillar: SEC
+      severity: HIGH
+      description: "Launch template root volume should be encrypted"
+      message: "Root EBS volume in launch template is not encrypted."
+      recommendation: "Set block_device_mappings { ebs { encrypted = true } }"
+      check:
+        op: fn
+        name: lt_root_volume_encrypted
+
+    - id: LT-003
+      pillar: COST
+      severity: LOW
+      description: "Launch template should not specify a key name (use SSM instead)"
+      message: "key_name is set in launch template. SSH access should be replaced with SSM Session Manager."
+      recommendation: "Remove key_name and configure SSM agent with AmazonSSMManagedInstanceCore policy."
+      check:
+        op: fn
+        name: lt_no_key_name
+
+  aws_launch_configuration:
+    - id: LC-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "aws_launch_configuration is deprecated; migrate to aws_launch_template"
+      message: "aws_launch_configuration is deprecated by AWS. It lacks support for IMDSv2 enforcement and newer instance features."
+      recommendation: "Replace aws_launch_configuration with aws_launch_template for full feature support."
+      check:
+        op: fn
+        name: always_false
+
+    - id: LC-002
+      pillar: SEC
+      severity: HIGH
+      description: "Launch configuration root EBS volume should be encrypted"
+      message: "Root EBS volume in launch configuration is not encrypted. Violates SEC05."
+      recommendation: "Set root_block_device { encrypted = true }"
+      check:
+        op: block_is_true
+        block: root_block_device
+        field: encrypted
+
+    - id: LC-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "Launch configuration should not assign public IP addresses"
+      message: "associate_public_ip_address = true. Instances get public IPs automatically."
+      recommendation: "Set associate_public_ip_address = false and use NAT Gateway for outbound access."
+      check:
+        op: not_true
+        field: associate_public_ip_address
+
+  aws_key_pair:
+    - id: EC2-KP-001
+      pillar: SEC
+      severity: LOW
+      description: "EC2 key pairs indicate SSH is used; prefer SSM Session Manager"
+      message: "EC2 key pair defined. SSH access requires port 22 open and key management. SSM Session Manager is keyless and auditable."
+      recommendation: "Remove key_name from aws_instance and use SSM Session Manager for shell access."
+      check:
+        op: fn
+        name: always_false
+
+  aws_eip:
+    - id: EIP-001
+      pillar: COST
+      severity: INFO
+      description: "Elastic IP should be tagged to track its purpose"
+      message: "EIP has no tags. Untagged EIPs are difficult to audit. Note: EIPs used by NAT Gateways or instances may appear unassociated in static analysis."
+      recommendation: "Add tags = { Name = ... Purpose = ... } to identify ownership."
+      check:
+        op: truthy
+        field: tags

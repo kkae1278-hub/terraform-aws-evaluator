@@ -1,0 +1,351 @@
+# security rules
+resources:
+  aws_security_group:
+    - id: SG-001
+      pillar: SEC
+      severity: CRITICAL
+      description: "No unrestricted ingress on admin/DB ports (22, 3306, 5432, 1433, 27017, 6379)"
+      message: "Security group allows unrestricted 0.0.0.0/0 access on sensitive admin/DB ports."
+      recommendation: "Restrict ingress to specific CIDR blocks or source security groups"
+      check:
+        op: fn
+        name: sg_no_admin_ports_open
+
+    - id: SG-002
+      pillar: SEC
+      severity: CRITICAL
+      description: "No unrestricted ingress on all ports (from_port=0, to_port=0, protocol=-1)"
+      message: "Security group allows ALL traffic from 0.0.0.0/0 (protocol = -1). Completely open ingress."
+      recommendation: "Restrict to specific ports and source CIDR blocks or security groups."
+      check:
+        op: fn
+        name: sg_no_all_traffic_open
+
+    - id: SG-003
+      pillar: SEC
+      severity: LOW
+      description: "Security group description should not be the default placeholder"
+      message: "Security group has no meaningful description. Hard to audit purpose during incident response."
+      recommendation: "Set a descriptive description explaining the SG's purpose and associated resource."
+      check:
+        op: not_in
+        field: description
+        default: ""
+        values:
+          - ""
+          - "Managed by Terraform"
+          - "default"
+
+  aws_security_group_rule:
+    - id: SGR-001
+      pillar: SEC
+      severity: CRITICAL
+      description: "Standalone SG rule must not allow 0.0.0.0/0 on admin/DB ports"
+      message: "Security group rule allows unrestricted 0.0.0.0/0 ingress on a sensitive admin/DB port."
+      recommendation: "Restrict cidr_blocks to specific known CIDR ranges or use source_security_group_id."
+      check:
+        op: fn
+        name: sgr_no_admin_ports_open
+
+    - id: SGR-002
+      pillar: SEC
+      severity: CRITICAL
+      description: "Standalone SG rule must not allow all traffic from 0.0.0.0/0 (protocol=-1)"
+      message: "Security group rule allows ALL ingress traffic from 0.0.0.0/0 (protocol=-1). Completely open."
+      recommendation: "Restrict to specific protocols, ports, and source CIDR blocks."
+      check:
+        op: fn
+        name: sgr_no_all_traffic_open
+
+    - id: SGR-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "Egress rule should not allow unrestricted outbound to all ports"
+      message: "Security group rule allows all egress traffic to 0.0.0.0/0. Consider restricting outbound."
+      recommendation: "Restrict egress to specific protocols and ports required by the application."
+      check:
+        op: fn
+        name: sgr_no_unrestricted_egress
+
+  aws_iam_role:
+    - id: IAM-001
+      pillar: SEC
+      severity: CRITICAL
+      description: "IAM role assume_role_policy should not allow all principals (*)"
+      message: "assume_role_policy allows any AWS principal (*). Any AWS account can assume this role."
+      recommendation: "Restrict Principal to specific account IDs, roles, or services."
+      check:
+        op: fn
+        name: iam_no_wildcard_principal
+
+    - id: IAM-002
+      pillar: SEC
+      severity: LOW
+      description: "IAM role should have a meaningful description"
+      message: "IAM role has no description. Hard to audit purpose during access reviews."
+      recommendation: "Set description = \"Purpose of this role and which service/team uses it\""
+      check:
+        op: fn
+        name: iam_role_description_set
+
+    - id: IAM-003
+      pillar: SEC
+      severity: LOW
+      description: "IAM role max_session_duration should be <= 4 hours"
+      message: "max_session_duration > 4 hours. Long-lived credentials increase blast radius if compromised."
+      recommendation: "Set max_session_duration <= 14400 (4 hours) for interactive roles"
+      check:
+        op: lte
+        field: max_session_duration
+        value: 14400
+
+  aws_iam_policy:
+    - id: IAM-004
+      pillar: SEC
+      severity: HIGH
+      description: "IAM policy should not use wildcard Action (*) on sensitive services"
+      message: "IAM policy contains Action: '*' (all actions). Violates least-privilege principle (SEC01)."
+      recommendation: "Enumerate only the specific actions required (e.g., s3:GetObject, rds:DescribeDBInstances)."
+      check:
+        op: fn
+        name: iam_no_wildcard_action
+
+  aws_iam_role_policy:
+    - id: IAM-005
+      pillar: SEC
+      severity: HIGH
+      description: "Inline IAM policy should not use wildcard Action on sensitive services"
+      message: "Inline policy contains Action: '*'. Least-privilege principle violated."
+      recommendation: "Replace '*' with specific required actions."
+      check:
+        op: fn
+        name: iam_inline_no_wildcard_action
+
+  aws_iam_policy_attachment:
+    - id: IAMA-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "aws_iam_policy_attachment is exclusive and should be replaced with targeted attachment resources"
+      message: "aws_iam_policy_attachment is an exclusive resource — it will silently detach the policy from any user/role/group not in its lists. This causes unexpected permission loss in shared environments."
+      recommendation: "Replace with aws_iam_role_policy_attachment, aws_iam_user_policy_attachment, or aws_iam_group_policy_attachment for non-exclusive, safe attachment."
+      check:
+        op: fn
+        name: always_false
+
+  aws_iam_role_policy_attachment:
+    - id: IAMRPA-001
+      pillar: SEC
+      severity: HIGH
+      description: "IAM role should not attach overly broad AWS managed policies"
+      message: "IAM role is attached to an overly broad AWS managed policy (AdministratorAccess / PowerUserAccess / IAMFullAccess)."
+      recommendation: "Replace with a least-privilege inline or customer-managed policy scoped to required actions."
+      check:
+        op: fn
+        name: iam_rpa_no_broad_policies
+
+  aws_kms_key:
+    - id: KMS-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "KMS key automatic rotation should be enabled"
+      message: "KMS key rotation is disabled. Key material is never rotated, increasing exposure window."
+      recommendation: "Set enable_key_rotation = true (annual rotation for symmetric keys)"
+      check:
+        op: is_true
+        field: enable_key_rotation
+
+    - id: KMS-002
+      pillar: SEC
+      severity: LOW
+      description: "KMS key should have a descriptive description"
+      message: "KMS key has no description. Hard to identify purpose during key management audits."
+      recommendation: "Set description = \"Purpose and associated resource of this key\""
+      check:
+        op: fn
+        name: iam_kms_description_set
+
+    - id: KMS-003
+      pillar: REL
+      severity: MEDIUM
+      description: "KMS key deletion window should be maximum (30 days)"
+      message: "deletion_window_in_days < 14. Short window risks unrecoverable accidental key deletion."
+      recommendation: "Set deletion_window_in_days = 30"
+      check:
+        op: gte
+        field: deletion_window_in_days
+        value: 14
+
+  aws_secretsmanager_secret:
+    - id: SM-001
+      pillar: REL
+      severity: MEDIUM
+      description: "Secret recovery window should be >= 7 days"
+      message: "recovery_window_in_days = 0 allows immediate unrecoverable deletion."
+      recommendation: "Set recovery_window_in_days = 7 minimum"
+      check:
+        op: gte
+        field: recovery_window_in_days
+        value: 7
+
+    - id: SM-002
+      pillar: SEC
+      severity: LOW
+      description: "Secrets Manager secret should be encrypted with a CMK"
+      message: "Secret is encrypted with the default AWS-managed key, not a customer-managed KMS key."
+      recommendation: "Set kms_key_id = <aws_kms_key ARN> for dedicated key control and audit trail"
+      check:
+        op: truthy
+        field: kms_key_id
+
+  aws_guardduty_detector:
+    - id: GD-001
+      pillar: SEC
+      severity: HIGH
+      description: "GuardDuty detector must be enabled"
+      message: "GuardDuty is not active. ML-based threat detection (recon, crypto-mining, credential theft) is off."
+      recommendation: "Set enable = true (default is true; explicitly set to avoid accidental disable)"
+      check:
+        op: not_false
+        field: enable
+
+    - id: GD-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "GuardDuty S3 protection should be enabled"
+      message: "GuardDuty S3 data event monitoring is not enabled. S3-based threats go undetected."
+      recommendation: "Set datasources { s3_logs { enable = true } }"
+      check:
+        op: fn
+        name: guardduty_s3_protection_enabled
+
+    - id: GD-003
+      pillar: SEC
+      severity: INFO
+      description: "GuardDuty EKS protection should be enabled if EKS is used"
+      message: "Verify GuardDuty EKS audit log monitoring is enabled if EKS clusters are present. Cannot be verified from the aws_guardduty_detector resource alone."
+      recommendation: "Set datasources { kubernetes { audit_logs { enable = true } } }"
+      check:
+        op: fn
+        name: always_false
+
+  aws_securityhub_account:
+    - id: SH-001
+      pillar: SEC
+      severity: INFO
+      description: "Security Hub auto-enable controls should be set"
+      message: "Verify Security Hub has standards subscriptions (CIS, FSBP) and auto-remediation enabled."
+      recommendation: "Add aws_securityhub_standards_subscription for CIS 1.4.0 and FSBP."
+      check:
+        op: fn
+        name: always_false
+
+  aws_macie2_account:
+    - id: MAC-001
+      pillar: SEC
+      severity: LOW
+      description: "Amazon Macie should be enabled for S3 data classification"
+      message: "Macie is not enabled. PII and sensitive data in S3 buckets goes undetected."
+      recommendation: "Set status = \"ENABLED\" and configure aws_macie2_classification_job for critical buckets."
+      check:
+        op: eq
+        field: status
+        value: ENABLED
+        default: ENABLED
+
+  aws_wafv2_web_acl:
+    - id: WAF-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "WAFv2 Web ACL should have at least one rule"
+      message: "WAFv2 Web ACL has no rules. All requests pass through without inspection."
+      recommendation: "Add AWS managed rule groups: AWSManagedRulesCommonRuleSet, AWSManagedRulesKnownBadInputsRuleSet"
+      check:
+        op: fn
+        name: waf_has_rules
+
+    - id: WAF-002
+      pillar: OPS
+      severity: INFO
+      description: "WAFv2 should have logging enabled"
+      message: "Verify WAFv2 has aws_wafv2_web_acl_logging_configuration associated. Blocked requests should be logged. Logging is configured via a separate resource and cannot be verified here."
+      recommendation: "Create aws_wafv2_web_acl_logging_configuration pointing to Kinesis Firehose or S3."
+      check:
+        op: fn
+        name: always_false
+
+  aws_cloudtrail:
+    - id: CT-001
+      pillar: SEC
+      severity: HIGH
+      description: "CloudTrail must be multi-region"
+      message: "Single-region CloudTrail. API activity in other regions is not recorded."
+      recommendation: "Set is_multi_region_trail = true"
+      check:
+        op: is_true
+        field: is_multi_region_trail
+
+    - id: CT-002
+      pillar: SEC
+      severity: HIGH
+      description: "Log file validation must be enabled (tamper detection)"
+      message: "Log file validation disabled. Deleted or modified CloudTrail logs cannot be detected."
+      recommendation: "Set enable_log_file_validation = true"
+      check:
+        op: is_true
+        field: enable_log_file_validation
+
+    - id: CT-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "CloudTrail logs should be KMS-encrypted"
+      message: "CloudTrail logs are not KMS-encrypted. SSE-S3 only."
+      recommendation: "Set kms_key_id = <aws_kms_key ARN>"
+      check:
+        op: truthy
+        field: kms_key_id
+
+    - id: CT-004
+      pillar: SEC
+      severity: MEDIUM
+      description: "Global service events (IAM, STS, Route53) must be captured"
+      message: "include_global_service_events = false. IAM, STS, and Route53 API calls are not logged."
+      recommendation: "Set include_global_service_events = true (default is true; explicitly set to avoid accidental disable)"
+      check:
+        op: not_false
+        field: include_global_service_events
+
+    - id: CT-005
+      pillar: OPS
+      severity: MEDIUM
+      description: "CloudTrail should be delivered to CloudWatch Logs for real-time alerting"
+      message: "CloudTrail is not delivering to CloudWatch Logs. Real-time metric filters and alarms cannot be set."
+      recommendation: "Set cloud_watch_logs_group_arn and cloud_watch_logs_role_arn"
+      check:
+        op: truthy
+        field: cloud_watch_logs_group_arn
+
+  aws_acm_certificate:
+    - id: ACM-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "ACM certificate validation method should be DNS (not EMAIL)"
+      message: "Certificate uses EMAIL validation. DNS validation is automated and does not expire."
+      recommendation: "Set validation_method = \"DNS\" and create aws_acm_certificate_validation with Route53."
+      check:
+        op: eq
+        field: validation_method
+        value: DNS
+        default: DNS
+
+    - id: ACM-002
+      pillar: SEC
+      severity: LOW
+      description: "ACM certificate should have certificate transparency logging enabled"
+      message: "Certificate transparency logging is disabled. Mis-issued certs cannot be detected via CT logs."
+      recommendation: "Set options { certificate_transparency_logging_preference = \"ENABLED\" } (default)"
+      check:
+        op: block_eq
+        block: options
+        field: certificate_transparency_logging_preference
+        value: ENABLED
+        default: ENABLED

@@ -12,8 +12,22 @@ Terraform の `.tf` ファイルを静的解析し、AWS のベストプラク�
 terraform_evaluator/
 ├── main.py                        # エントリーポイント（CLI 引数解析・実行制御）
 ├── hcl_parser.py                  # HCL2 パーサー（.tf ファイルの読み込みと変数解決）
-├── reference.py                   # ルール辞書（各リソースのベストプラクティスルール定義）
-├── evaluator.py                   # 評価エンジン（静的チェック・AWS 実環境比較・レポート生成）
+├── evaluator.py                   # 評価エンジン（静的チェック・レポート生成）
+├── reference.py                   # 公開 API（TERRAFORM_RULES / SEVERITY_WEIGHTS を re-export）
+├── rule_loader.py                 # YAML ルールファイルを読み込み TERRAFORM_RULES を構築
+├── checks.py                      # 複雑なチェック関数（YAML DSL で表現できないロジック）
+├── helpers.py                     # HCL2 ブロック操作ヘルパー（_block / _blocks / _int）
+├── rules/                         # ベストプラクティス定義（YAML・カテゴリ別）
+│   ├── compute.yml                # EC2, ASG, Launch Template/Config
+│   ├── container.yml              # ECS, EKS, ECR
+│   ├── serverless.yml             # Lambda, Step Functions, API Gateway
+│   ├── database.yml               # RDS, DynamoDB, ElastiCache, Redshift, OpenSearch
+│   ├── network.yml                # VPC, ALB, SG, CloudFront, Route53
+│   ├── storage.yml                # S3, EBS, Kinesis
+│   ├── security.yml               # IAM, KMS, CloudTrail, GuardDuty, Secrets Manager
+│   ├── operations.yml             # CloudWatch, Config, Backup, SSM
+│   ├── messaging.yml              # SQS, SNS, MSK
+│   └── cicd.yml                   # CodeBuild, CodeDeploy, CodePipeline
 ├── requirements.txt               # 実行依存ライブラリ
 ├── requirements-dev.txt           # 開発・テスト用依存ライブラリ
 ├── scripts/
@@ -34,6 +48,7 @@ terraform_evaluator/
 |---|---|
 | Python | 3.8 以上 |
 | python-hcl2 | 4.3.0 以上（**必須**） |
+| pyyaml | 6.0 以上（**必須**） |
 
 ## セットアップ
 
@@ -49,11 +64,12 @@ pip install -r requirements-dev.txt
 
 | ライブラリ | 必須 | 用途 |
 |---|---|---|
-| `python-hcl2` | **必須** | HCL2 形式の `.tf` ファイルのパース。未インストールの場合はエラーで終了 |
+| `python-hcl2` | **必須** | HCL2 形式の `.tf` ファイルのパース |
+| `pyyaml` | **必須** | `rules/` 配下の YAML ルールファイルの読み込み |
 | `pytest` | テスト時のみ | ユニットテスト・フィクスチャ評価 |
 
-> **注意:** `python-hcl2` は必須依存ライブラリです。以前あった正規表現フォールバックパーサーは削除されました。
-> ネストブロック（`metadata_options`, `root_block_device` 等）の正確なパースに hcl2 が必要なためです。
+> **注意:** `python-hcl2` および `pyyaml` はともに必須依存ライブラリです。
+> `pip install -r requirements.txt` で両方インストールされます。
 
 ---
 

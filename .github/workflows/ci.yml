@@ -83,4 +83,4 @@ jobs:
 
       - name: Lint (errors only, no style enforcement)
         working-directory: terraform_evaluator
-        run: flake8 main.py hcl_parser.py evaluator.py reference.py --max-line-length=120 --select=E9,F821,F401
+        run: flake8 main.py hcl_parser.py evaluator.py reference.py helpers.py rule_loader.py checks.py --max-line-length=120 --select=E9,F821,F401

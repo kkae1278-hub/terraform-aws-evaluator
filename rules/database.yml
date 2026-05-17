@@ -1,0 +1,444 @@
+# database rules
+resources:
+  aws_db_instance:
+    - id: RDS-001
+      pillar: REL
+      severity: HIGH
+      description: "Multi-AZ must be enabled for high availability"
+      message: "multi_az = false. Single-AZ has no automatic failover — failover takes 1-2 minutes manually."
+      recommendation: "Set multi_az = true"
+      check:
+        op: is_true
+        field: multi_az
+
+    - id: RDS-002
+      pillar: REL
+      severity: HIGH
+      description: "Deletion protection must be enabled"
+      message: "deletion_protection = false. The DB instance can be accidentally deleted."
+      recommendation: "Set deletion_protection = true"
+      check:
+        op: is_true
+        field: deletion_protection
+
+    - id: RDS-003
+      pillar: REL
+      severity: HIGH
+      description: "Final snapshot must not be skipped on deletion"
+      message: "skip_final_snapshot = true. No backup is created on deletion — permanent data loss risk."
+      recommendation: "Set skip_final_snapshot = false and specify final_snapshot_identifier"
+      check:
+        op: not_true
+        field: skip_final_snapshot
+
+    - id: RDS-004
+      pillar: OPS
+      severity: MEDIUM
+      description: "Enhanced Monitoring should be enabled (monitoring_interval > 0)"
+      message: "monitoring_interval = 0 disables Enhanced Monitoring. OS-level metrics (memory, swap, disk I/O) unavailable."
+      recommendation: "Set monitoring_interval = 60 and provide monitoring_role_arn"
+      check:
+        op: gt
+        field: monitoring_interval
+        value: 0
+
+    - id: RDS-005
+      pillar: OPS
+      severity: MEDIUM
+      description: "Performance Insights should be enabled"
+      message: "performance_insights_enabled = false. SQL-level wait analysis and top SQL statements unavailable."
+      recommendation: "Set performance_insights_enabled = true"
+      check:
+        op: is_true
+        field: performance_insights_enabled
+
+    - id: RDS-006
+      pillar: SEC
+      severity: HIGH
+      description: "Storage must be encrypted at rest"
+      message: "RDS storage is not encrypted at rest. Violates SEC05."
+      recommendation: "Set storage_encrypted = true"
+      check:
+        op: is_true
+        field: storage_encrypted
+
+    - id: RDS-007
+      pillar: REL
+      severity: MEDIUM
+      description: "Backup retention period should be >= 7 days"
+      message: "Backup retention < 7 days. Recovery window is too short for most incident investigations."
+      recommendation: "Set backup_retention_period >= 7"
+      check:
+        op: gte
+        field: backup_retention_period
+        value: 7
+
+    - id: RDS-008
+      pillar: SEC
+      severity: LOW
+      description: "Auto minor version upgrade should be enabled"
+      message: "auto_minor_version_upgrade = false. Security patches for minor versions won't apply automatically."
+      recommendation: "Set auto_minor_version_upgrade = true"
+      check:
+        op: not_false
+        field: auto_minor_version_upgrade
+
+    - id: RDS-009
+      pillar: SEC
+      severity: CRITICAL
+      description: "RDS should not be publicly accessible"
+      message: "publicly_accessible = true. RDS instance is reachable from the internet."
+      recommendation: "Set publicly_accessible = false and place RDS in a private subnet."
+      check:
+        op: not_true
+        field: publicly_accessible
+
+    - id: RDS-010
+      pillar: REL
+      severity: LOW
+      description: "Storage autoscaling (max_allocated_storage) should be configured"
+      message: "max_allocated_storage is not set. Storage cannot autoscale — disk full risk under load."
+      recommendation: "Set max_allocated_storage to an appropriate ceiling (e.g., 500)"
+      check:
+        op: gt
+        field: max_allocated_storage
+        value: 0
+
+    - id: RDS-011
+      pillar: COST
+      severity: LOW
+      description: "RDS storage type should be gp3 for cost efficiency"
+      message: "storage_type is not gp3 (default is gp2). gp3 is cheaper and provides configurable IOPS/throughput."
+      recommendation: "Set storage_type = \"gp3\""
+      check:
+        op: eq
+        field: storage_type
+        value: gp3
+        default: gp2
+
+    - id: RDS-012
+      pillar: SEC
+      severity: MEDIUM
+      description: "CA certificate should be updated to rds-ca-rsa2048-g1 or newer"
+      message: "Using an old CA certificate (rds-ca-2015 or rds-ca-2019) that may expire soon."
+      recommendation: "Set ca_cert_identifier = \"rds-ca-rsa2048-g1\" or \"rds-ca-ecc384-g1\""
+      check:
+        op: not_in
+        field: ca_cert_identifier
+        default: rds-ca-rsa2048-g1
+        values:
+          - rds-ca-2015
+          - rds-ca-2019
+
+  aws_rds_cluster:
+    - id: AUR-001
+      pillar: REL
+      severity: HIGH
+      description: "Aurora cluster deletion protection must be enabled"
+      message: "Aurora cluster has deletion_protection = false."
+      recommendation: "Set deletion_protection = true"
+      check:
+        op: is_true
+        field: deletion_protection
+
+    - id: AUR-002
+      pillar: SEC
+      severity: HIGH
+      description: "Aurora cluster storage must be encrypted"
+      message: "Aurora storage is not encrypted at rest."
+      recommendation: "Set storage_encrypted = true"
+      check:
+        op: is_true
+        field: storage_encrypted
+
+    - id: AUR-003
+      pillar: REL
+      severity: MEDIUM
+      description: "Aurora backup retention should be >= 7 days"
+      message: "Aurora backup_retention_period < 7 days."
+      recommendation: "Set backup_retention_period >= 7"
+      check:
+        op: gte
+        field: backup_retention_period
+        value: 7
+
+    - id: AUR-004
+      pillar: SEC
+      severity: INFO
+      description: "Aurora cluster instances should not be publicly accessible"
+      message: "publicly_accessible is controlled on aws_rds_cluster_instance, not aws_rds_cluster. Verify each cluster instance has publicly_accessible = false."
+      recommendation: "Set publicly_accessible = false on each aws_rds_cluster_instance resource."
+      check:
+        op: fn
+        name: always_false
+
+    - id: AUR-005
+      pillar: SEC
+      severity: MEDIUM
+      description: "Aurora should enable IAM database authentication"
+      message: "IAM database authentication is not enabled. Password-only auth increases credential exposure risk."
+      recommendation: "Set iam_database_authentication_enabled = true to allow IAM-based passwordless auth"
+      check:
+        op: truthy
+        field: iam_database_authentication_enabled
+
+  aws_dynamodb_table:
+    - id: DDB-001
+      pillar: REL
+      severity: HIGH
+      description: "DynamoDB point-in-time recovery (PITR) must be enabled"
+      message: "PITR is disabled. Table cannot be restored to an arbitrary second within the last 35 days."
+      recommendation: "Set point_in_time_recovery { enabled = true }"
+      check:
+        op: block_is_true
+        block: point_in_time_recovery
+        field: enabled
+
+    - id: DDB-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "DynamoDB table should be encrypted with a CMK"
+      message: "DynamoDB server-side encryption is not explicitly enabled with a CMK."
+      recommendation: "Set server_side_encryption { enabled = true kms_key_arn = <aws_kms_key ARN> }"
+      check:
+        op: block_is_true
+        block: server_side_encryption
+        field: enabled
+
+    - id: DDB-003
+      pillar: REL
+      severity: HIGH
+      description: "DynamoDB deletion protection should be enabled"
+      message: "deletion_protection_enabled = false. Table can be accidentally deleted."
+      recommendation: "Set deletion_protection_enabled = true"
+      check:
+        op: is_true
+        field: deletion_protection_enabled
+
+    - id: DDB-004
+      pillar: COST
+      severity: INFO
+      description: "DynamoDB should use on-demand or auto-scaling billing"
+      message: "Review billing_mode. PAY_PER_REQUEST (on-demand) is recommended for unpredictable workloads; PROVISIONED with autoscaling for predictable ones."
+      recommendation: "Set billing_mode = \"PAY_PER_REQUEST\" or configure autoscaling with aws_appautoscaling_target."
+      check:
+        op: fn
+        name: always_false
+
+    - id: DDB-005
+      pillar: OPS
+      severity: INFO
+      description: "DynamoDB table should have TTL configured for expiring stale data"
+      message: "No TTL configured. Stale items accumulate, increasing storage costs."
+      recommendation: "Set ttl { enabled = true attribute_name = \"expiry_time\" } where applicable."
+      check:
+        op: block_truthy
+        block: ttl
+        field: attribute_name
+
+    - id: DDB-006
+      pillar: OPS
+      severity: INFO
+      description: "DynamoDB contributor insights should be enabled for large tables"
+      message: "Consider enabling contributor insights to identify hot partitions. Configured via separate aws_dynamodb_contributor_insights resource — verify manually."
+      recommendation: "Enable aws_dynamodb_contributor_insights for tables with high read/write throughput."
+      check:
+        op: fn
+        name: always_false
+
+  aws_elasticache_replication_group:
+    - id: EC-001
+      pillar: SEC
+      severity: HIGH
+      description: "ElastiCache should have at-rest encryption enabled"
+      message: "at_rest_encryption_enabled = false. Cached data is not protected at rest."
+      recommendation: "Set at_rest_encryption_enabled = true"
+      check:
+        op: is_true
+        field: at_rest_encryption_enabled
+
+    - id: EC-002
+      pillar: SEC
+      severity: HIGH
+      description: "ElastiCache should have in-transit encryption enabled"
+      message: "transit_encryption_enabled = false. Data in transit between client and ElastiCache is unencrypted."
+      recommendation: "Set transit_encryption_enabled = true"
+      check:
+        op: is_true
+        field: transit_encryption_enabled
+
+    - id: EC-003
+      pillar: REL
+      severity: HIGH
+      description: "ElastiCache automatic failover should be enabled"
+      message: "automatic_failover_enabled = false. Redis primary failure requires manual promotion."
+      recommendation: "Set automatic_failover_enabled = true (requires num_cache_clusters >= 2)"
+      check:
+        op: is_true
+        field: automatic_failover_enabled
+
+    - id: EC-004
+      pillar: SEC
+      severity: MEDIUM
+      description: "ElastiCache Redis should require auth token"
+      message: "No auth_token set. Redis is accessible without authentication within the VPC."
+      recommendation: "Set auth_token = <random strong password> and store in Secrets Manager"
+      check:
+        op: truthy
+        field: auth_token
+
+  aws_elasticache_cluster:
+    - id: EC-005
+      pillar: PERF
+      severity: LOW
+      description: "ElastiCache node type should not be previous-generation (cache.t2, cache.m3)"
+      message: "Using previous-generation ElastiCache node type."
+      recommendation: "Migrate to cache.t3 or cache.m5/r6g for better performance per cost."
+      check:
+        op: not_startswith
+        field: node_type
+        default: ""
+        prefixes:
+          - "cache.t2."
+          - "cache.m3."
+
+  aws_redshift_cluster:
+    - id: RS-001
+      pillar: SEC
+      severity: HIGH
+      description: "Redshift cluster must be encrypted"
+      message: "Redshift cluster is not encrypted. Data warehouse data stored in plaintext."
+      recommendation: "Set encrypted = true and kms_key_id = <aws_kms_key ARN>"
+      check:
+        op: is_true
+        field: encrypted
+
+    - id: RS-002
+      pillar: SEC
+      severity: CRITICAL
+      description: "Redshift cluster should not be publicly accessible"
+      message: "Redshift cluster is publicly accessible from the internet."
+      recommendation: "Set publicly_accessible = false and place in a private subnet."
+      check:
+        op: not_true
+        field: publicly_accessible
+
+    - id: RS-003
+      pillar: OPS
+      severity: MEDIUM
+      description: "Redshift audit logging should be enabled"
+      message: "Redshift audit logging is disabled. User activity and connection logs are unavailable."
+      recommendation: "Set logging { enable = true bucket_name = <s3_bucket> }"
+      check:
+        op: block_truthy
+        block: logging
+        field: enable
+
+    - id: RS-004
+      pillar: PERF
+      severity: MEDIUM
+      description: "Redshift should use enhanced VPC routing"
+      message: "Enhanced VPC routing is disabled. COPY/UNLOAD traffic may route through the internet."
+      recommendation: "Set enhanced_vpc_routing = true to route traffic through VPC."
+      check:
+        op: is_true
+        field: enhanced_vpc_routing
+
+    - id: RS-005
+      pillar: REL
+      severity: MEDIUM
+      description: "Redshift automated snapshot retention should be >= 7 days"
+      message: "Redshift snapshot retention < 7 days. Recovery window is too short."
+      recommendation: "Set automated_snapshot_retention_period >= 7"
+      check:
+        op: gte
+        field: automated_snapshot_retention_period
+        value: 7
+
+    - id: RS-006
+      pillar: SEC
+      severity: MEDIUM
+      description: "Redshift default database password should be managed via Secrets Manager"
+      message: "master_password is hardcoded in Terraform config. Rotate and move to Secrets Manager."
+      recommendation: "Use manage_master_password = true (Redshift Serverless) or store in Secrets Manager."
+      check:
+        op: fn
+        name: redshift_no_master_password
+
+  aws_opensearch_domain:
+    - id: OS-001
+      pillar: SEC
+      severity: HIGH
+      description: "OpenSearch node-to-node encryption must be enabled"
+      message: "Node-to-node encryption is disabled. Intra-cluster traffic is unencrypted."
+      recommendation: "Set node_to_node_encryption { enabled = true }"
+      check:
+        op: block_is_true
+        block: node_to_node_encryption
+        field: enabled
+
+    - id: OS-002
+      pillar: SEC
+      severity: HIGH
+      description: "OpenSearch encryption at rest must be enabled"
+      message: "Encryption at rest is disabled. Domain data is stored unencrypted."
+      recommendation: "Set encrypt_at_rest { enabled = true }"
+      check:
+        op: block_is_true
+        block: encrypt_at_rest
+        field: enabled
+
+    - id: OS-003
+      pillar: SEC
+      severity: HIGH
+      description: "OpenSearch domain should enforce HTTPS only"
+      message: "enforce_https = false. HTTP connections to OpenSearch are allowed."
+      recommendation: "Set domain_endpoint_options { enforce_https = true tls_security_policy = \"Policy-Min-TLS-1-2-2019-07\" }"
+      check:
+        op: block_is_true
+        block: domain_endpoint_options
+        field: enforce_https
+
+    - id: OS-004
+      pillar: SEC
+      severity: CRITICAL
+      description: "OpenSearch should not be publicly accessible"
+      message: "OpenSearch domain has no vpc_options. Domain may be publicly accessible."
+      recommendation: "Set vpc_options { subnet_ids = [...] security_group_ids = [...] }"
+      check:
+        op: fn
+        name: opensearch_in_vpc
+
+    - id: OS-005
+      pillar: REL
+      severity: MEDIUM
+      description: "OpenSearch should have at least 3 dedicated master nodes"
+      message: "Dedicated master nodes are not enabled. Cluster stability at risk during high indexing load."
+      recommendation: "Set cluster_config { dedicated_master_enabled = true dedicated_master_count = 3 }"
+      check:
+        op: block_is_true
+        block: cluster_config
+        field: dedicated_master_enabled
+
+  aws_elasticsearch_domain:
+    - id: ES-001
+      pillar: SEC
+      severity: HIGH
+      description: "Elasticsearch node-to-node encryption must be enabled"
+      message: "node_to_node_encryption is disabled on Elasticsearch domain."
+      recommendation: "Set node_to_node_encryption { enabled = true } (migrate to OpenSearch is recommended)"
+      check:
+        op: block_is_true
+        block: node_to_node_encryption
+        field: enabled
+
+    - id: ES-002
+      pillar: SEC
+      severity: HIGH
+      description: "Elasticsearch encryption at rest must be enabled"
+      message: "Encryption at rest is disabled."
+      recommendation: "Set encrypt_at_rest { enabled = true }"
+      check:
+        op: block_is_true
+        block: encrypt_at_rest
+        field: enabled

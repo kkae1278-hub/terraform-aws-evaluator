@@ -1,0 +1,154 @@
+# container rules
+resources:
+  aws_ecs_task_definition:
+    - id: ECS-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "ECS task definition should use awsvpc network mode"
+      message: "network_mode != awsvpc. Task shares the host's network namespace — weaker isolation."
+      recommendation: "Set network_mode = \"awsvpc\" for task-level security group assignment"
+      check:
+        op: eq
+        field: network_mode
+        value: awsvpc
+        default: bridge
+
+    - id: ECS-002
+      pillar: SEC
+      severity: HIGH
+      description: "ECS task definition should specify an execution role ARN"
+      message: "No execution_role_arn set. ECR image pulls and Secrets Manager access may use broad permissions."
+      recommendation: "Create a dedicated task execution role with minimum required permissions."
+      check:
+        op: truthy
+        field: execution_role_arn
+
+    - id: ECS-003
+      pillar: SEC
+      severity: HIGH
+      description: "ECS containers should not run as privileged"
+      message: "Container runs with privileged = true. Container can access all host devices."
+      recommendation: "Remove privileged = true; use specific Linux capabilities if needed."
+      check:
+        op: fn
+        name: ecs_no_privileged_containers
+
+  aws_ecs_service:
+    - id: ECS-004
+      pillar: REL
+      severity: MEDIUM
+      description: "ECS service should have multiple tasks for redundancy"
+      message: "desired_count < 2. A single task failure takes down the service."
+      recommendation: "Set desired_count >= 2 and enable circuit breaker"
+      check:
+        op: gte
+        field: desired_count
+        value: 2
+
+    - id: ECS-005
+      pillar: REL
+      severity: MEDIUM
+      description: "ECS service circuit breaker should be enabled"
+      message: "Deployment circuit breaker is not enabled. Bad deployments will keep retrying indefinitely."
+      recommendation: "Set deployment_circuit_breaker { enable = true rollback = true }"
+      check:
+        op: block_is_true
+        block: deployment_circuit_breaker
+        field: enable
+
+  aws_ecs_cluster:
+    - id: ECSC-001
+      pillar: OPS
+      severity: MEDIUM
+      description: "ECS cluster Container Insights should be enabled"
+      message: "Container Insights is not enabled. Cluster-level CPU/memory/network metrics are unavailable."
+      recommendation: "Set setting { name = \"containerInsights\" value = \"enabled\" }"
+      check:
+        op: fn
+        name: ecs_cluster_container_insights
+
+    - id: ECSC-002
+      pillar: OPS
+      severity: LOW
+      description: "ECS cluster execute command logging should be configured"
+      message: "ECS Exec command logging is not configured. Interactive exec sessions leave no audit trail."
+      recommendation: "Set configuration { execute_command_configuration { logging = \"OVERRIDE\" log_configuration { ... } } }"
+      check:
+        op: fn
+        name: ecs_cluster_exec_logging
+
+  aws_eks_cluster:
+    - id: EKS-001
+      pillar: SEC
+      severity: HIGH
+      description: "EKS API server should not be publicly accessible without IP restrictions"
+      message: "EKS API endpoint is public with no CIDR restrictions. Anyone can reach the API server."
+      recommendation: "Set endpoint_private_access = true or restrict public_access_cidrs to known IPs."
+      check:
+        op: fn
+        name: eks_api_not_public_unrestricted
+
+    - id: EKS-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "EKS control plane logging should be enabled"
+      message: "EKS control plane logging is not enabled. API server, audit, and authenticator logs unavailable."
+      recommendation: "Set enabled_cluster_log_types = [\"api\", \"audit\", \"authenticator\", \"controllerManager\", \"scheduler\"]"
+      check:
+        op: truthy
+        field: enabled_cluster_log_types
+
+    - id: EKS-003
+      pillar: SEC
+      severity: HIGH
+      description: "EKS secrets should be encrypted with a KMS key"
+      message: "EKS Kubernetes secrets are not encrypted with a CMK. etcd secrets are only base64-encoded."
+      recommendation: "Add encryption_config { resources = [\"secrets\"] provider { key_arn = ... } }"
+      check:
+        op: fn
+        name: eks_secrets_encrypted
+
+  aws_ecr_repository:
+    - id: ECR-001
+      pillar: SEC
+      severity: HIGH
+      description: "ECR image scanning on push must be enabled"
+      message: "scan_on_push = false. Container images are not scanned for CVEs on push."
+      recommendation: "Set image_scanning_configuration { scan_on_push = true }"
+      check:
+        op: block_is_true
+        block: image_scanning_configuration
+        field: scan_on_push
+
+    - id: ECR-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "ECR image tag immutability should be enforced"
+      message: "image_tag_mutability = MUTABLE. Tags (e.g., 'latest') can be silently overwritten."
+      recommendation: "Set image_tag_mutability = \"IMMUTABLE\" to prevent tag overwrites."
+      check:
+        op: eq
+        field: image_tag_mutability
+        value: IMMUTABLE
+        default: MUTABLE
+
+    - id: ECR-003
+      pillar: SEC
+      severity: LOW
+      description: "ECR repository should be encrypted with a CMK"
+      message: "ECR repository is encrypted with the default AWS-managed key, not a CMK."
+      recommendation: "Set encryption_configuration { encryption_type = \"KMS\" kms_key = <aws_kms_key ARN> }"
+      check:
+        op: block_truthy
+        block: encryption_configuration
+        field: kms_key
+
+    - id: ECR-004
+      pillar: COST
+      severity: INFO
+      description: "ECR repository should have a lifecycle policy to remove old images"
+      message: "No aws_ecr_lifecycle_policy associated. Old/untagged images accumulate and increase storage cost. This cannot be verified from the aws_ecr_repository resource alone — check manually."
+      recommendation: "Create aws_ecr_lifecycle_policy to expire untagged images after 14 days and keep last N tagged."
+      check:
+        op: fn
+        name: always_false

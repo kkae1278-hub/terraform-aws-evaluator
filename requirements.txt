@@ -1,2 +1,5 @@
 # required — HCL2 parser for .tf files (mandatory, no fallback)
 python-hcl2>=4.3.0
+
+# required — YAML rule file loading
+pyyaml>=6.0
