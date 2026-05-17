@@ -17,17 +17,8 @@ terraform_evaluator/
 ├── rule_loader.py                 # YAML ルールファイルを読み込み TERRAFORM_RULES を構築
 ├── checks.py                      # 複雑なチェック関数（YAML DSL で表現できないロジック）
 ├── helpers.py                     # HCL2 ブロック操作ヘルパー（_block / _blocks / _int）
-├── rules/                         # ベストプラクティス定義（YAML・カテゴリ別）
-│   ├── compute.yml                # EC2, ASG, Launch Template/Config
-│   ├── container.yml              # ECS, EKS, ECR
-│   ├── serverless.yml             # Lambda, Step Functions, API Gateway
-│   ├── database.yml               # RDS, DynamoDB, ElastiCache, Redshift, OpenSearch
-│   ├── network.yml                # VPC, ALB, SG, CloudFront, Route53
-│   ├── storage.yml                # S3, EBS, Kinesis
-│   ├── security.yml               # IAM, KMS, CloudTrail, GuardDuty, Secrets Manager
-│   ├── operations.yml             # CloudWatch, Config, Backup, SSM
-│   ├── messaging.yml              # SQS, SNS, MSK
-│   └── cicd.yml                   # CodeBuild, CodeDeploy, CodePipeline
+├── rules/
+│   └── rules.yml                  # ベストプラクティス定義（72 リソース・188 ルール、カテゴリ別キー構成）
 ├── requirements.txt               # 実行依存ライブラリ
 ├── requirements-dev.txt           # 開発・テスト用依存ライブラリ
 ├── scripts/

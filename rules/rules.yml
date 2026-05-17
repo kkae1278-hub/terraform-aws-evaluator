@@ -1,0 +1,2060 @@
+# Terraform AWS best-practice rules
+# 72 resource types, 188 rules
+# Grouped by category. Edit this file to add, modify, or remove rules.
+
+compute:
+  aws_instance:
+    - id: EC2-001
+      pillar: SEC
+      severity: HIGH
+      description: "IMDSv2 (http_tokens=required) must be enforced"
+      message: "IMDSv2 is not required. http_tokens != 'required' exposes the instance to SSRF-based metadata theft."
+      recommendation: "Set metadata_options { http_tokens = \"required\" http_put_response_hop_limit = 1 }"
+      check:
+        op: block_eq
+        block: metadata_options
+        field: http_tokens
+        value: required
+
+    - id: EC2-002
+      pillar: SEC
+      severity: HIGH
+      description: "Root EBS volume must be encrypted at rest"
+      message: "Root EBS volume is not encrypted at rest. Violates SEC05 (protect data at rest)."
+      recommendation: "Set root_block_device { encrypted = true }"
+      check:
+        op: block_is_true
+        block: root_block_device
+        field: encrypted
+
+    - id: EC2-003
+      pillar: OPS
+      severity: MEDIUM
+      description: "Detailed (1-minute) CloudWatch monitoring should be enabled"
+      message: "Detailed monitoring is disabled. Default 5-minute intervals reduce alerting granularity."
+      recommendation: "Set monitoring = true"
+      check:
+        op: is_true
+        field: monitoring
+
+    - id: EC2-004
+      pillar: COST
+      severity: LOW
+      description: "EBS root volume type should be gp3"
+      message: "Root EBS volume is not gp3 (default is gp2). gp3 costs 20% less than gp2 with higher baseline throughput."
+      recommendation: "Set root_block_device { volume_type = \"gp3\" }"
+      check:
+        op: block_eq
+        block: root_block_device
+        field: volume_type
+        value: gp3
+        default: gp2
+
+    - id: EC2-005
+      pillar: SEC
+      severity: MEDIUM
+      description: "EC2 instance should not have a public IP (prefer private subnet + NAT/VPC Endpoint)"
+      message: "associate_public_ip_address = true. Instance is directly reachable from the internet."
+      recommendation: "Place instance in a private subnet and use NAT Gateway or VPC Endpoints for outbound access."
+      check:
+        op: not_true
+        field: associate_public_ip_address
+
+    - id: EC2-006
+      pillar: REL
+      severity: LOW
+      description: "EBS volume delete_on_termination should be explicit"
+      message: "delete_on_termination is not explicitly set. Default (true) may cause unexpected data loss on termination."
+      recommendation: "Explicitly set root_block_device { delete_on_termination = false } for data volumes."
+      check:
+        op: block_has_key
+        block: root_block_device
+        field: delete_on_termination
+
+    - id: EC2-007
+      pillar: PERF
+      severity: LOW
+      description: "Avoid previous-generation instance types (t2, m3, c3, r3)"
+      message: "Previous-generation instance type detected. Newer generations offer better performance per cost."
+      recommendation: "Migrate to t3/t4g, m5/m6i, c5/c6i or equivalent current-generation types."
+      check:
+        op: not_startswith
+        field: instance_type
+        default: ""
+        prefixes:
+          - "t2."
+          - "m3."
+          - "c3."
+          - "r3."
+          - "i2."
+
+  aws_autoscaling_group:
+    - id: ASG-001
+      pillar: REL
+      severity: MEDIUM
+      description: "Health check type should be ELB (not EC2) when behind a load balancer"
+      message: "health_check_type = EC2. EC2 checks only detect OS-level failure, not application failure."
+      recommendation: "Set health_check_type = \"ELB\" when instances are behind an ALB/NLB"
+      check:
+        op: eq
+        field: health_check_type
+        value: ELB
+        default: EC2
+
+    - id: ASG-002
+      pillar: REL
+      severity: MEDIUM
+      description: "Minimum instance count should be >= 2 for high availability"
+      message: "min_size < 2. A single-instance ASG has no redundancy — one AZ failure takes down the service."
+      recommendation: "Set min_size >= 2 and use multiple availability_zones"
+      check:
+        op: gte
+        field: min_size
+        value: 2
+
+    - id: ASG-003
+      pillar: REL
+      severity: HIGH
+      description: "ASG should span multiple Availability Zones"
+      message: "ASG is configured for a single AZ. One AZ outage removes all capacity."
+      recommendation: "Set vpc_zone_identifier to subnets in at least 2 AZs"
+      check:
+        op: fn
+        name: asg_multi_az
+
+    - id: ASG-004
+      pillar: REL
+      severity: LOW
+      description: "Instance refresh should be configured for safe deployments"
+      message: "No instance_refresh block. AMI updates replace all instances simultaneously without health checks."
+      recommendation: "Add instance_refresh { strategy = \"Rolling\" preferences { min_healthy_percentage = 90 } }"
+      check:
+        op: has_key
+        field: instance_refresh
+
+    - id: ASG-005
+      pillar: COST
+      severity: INFO
+      description: "Consider using mixed instances policy with Spot for cost savings"
+      message: "Using On-Demand only. Mixed instances policy with Spot can reduce EC2 costs by 60-90%."
+      recommendation: "Evaluate mixed_instances_policy with Spot for non-critical workloads."
+      check:
+        op: fn
+        name: always_false
+
+  aws_launch_template:
+    - id: LT-001
+      pillar: SEC
+      severity: HIGH
+      description: "Launch template should enforce IMDSv2"
+      message: "Launch template does not enforce IMDSv2. Instances launched from this template are vulnerable to SSRF."
+      recommendation: "Set metadata_options { http_tokens = \"required\" http_put_response_hop_limit = 1 }"
+      check:
+        op: block_eq
+        block: metadata_options
+        field: http_tokens
+        value: required
+
+    - id: LT-002
+      pillar: SEC
+      severity: HIGH
+      description: "Launch template root volume should be encrypted"
+      message: "Root EBS volume in launch template is not encrypted."
+      recommendation: "Set block_device_mappings { ebs { encrypted = true } }"
+      check:
+        op: fn
+        name: lt_root_volume_encrypted
+
+    - id: LT-003
+      pillar: COST
+      severity: LOW
+      description: "Launch template should not specify a key name (use SSM instead)"
+      message: "key_name is set in launch template. SSH access should be replaced with SSM Session Manager."
+      recommendation: "Remove key_name and configure SSM agent with AmazonSSMManagedInstanceCore policy."
+      check:
+        op: fn
+        name: lt_no_key_name
+
+  aws_launch_configuration:
+    - id: LC-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "aws_launch_configuration is deprecated; migrate to aws_launch_template"
+      message: "aws_launch_configuration is deprecated by AWS. It lacks support for IMDSv2 enforcement and newer instance features."
+      recommendation: "Replace aws_launch_configuration with aws_launch_template for full feature support."
+      check:
+        op: fn
+        name: always_false
+
+    - id: LC-002
+      pillar: SEC
+      severity: HIGH
+      description: "Launch configuration root EBS volume should be encrypted"
+      message: "Root EBS volume in launch configuration is not encrypted. Violates SEC05."
+      recommendation: "Set root_block_device { encrypted = true }"
+      check:
+        op: block_is_true
+        block: root_block_device
+        field: encrypted
+
+    - id: LC-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "Launch configuration should not assign public IP addresses"
+      message: "associate_public_ip_address = true. Instances get public IPs automatically."
+      recommendation: "Set associate_public_ip_address = false and use NAT Gateway for outbound access."
+      check:
+        op: not_true
+        field: associate_public_ip_address
+
+  aws_key_pair:
+    - id: EC2-KP-001
+      pillar: SEC
+      severity: LOW
+      description: "EC2 key pairs indicate SSH is used; prefer SSM Session Manager"
+      message: "EC2 key pair defined. SSH access requires port 22 open and key management. SSM Session Manager is keyless and auditable."
+      recommendation: "Remove key_name from aws_instance and use SSM Session Manager for shell access."
+      check:
+        op: fn
+        name: always_false
+
+  aws_eip:
+    - id: EIP-001
+      pillar: COST
+      severity: INFO
+      description: "Elastic IP should be tagged to track its purpose"
+      message: "EIP has no tags. Untagged EIPs are difficult to audit. Note: EIPs used by NAT Gateways or instances may appear unassociated in static analysis."
+      recommendation: "Add tags = { Name = ... Purpose = ... } to identify ownership."
+      check:
+        op: truthy
+        field: tags
+
+container:
+  aws_ecs_task_definition:
+    - id: ECS-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "ECS task definition should use awsvpc network mode"
+      message: "network_mode != awsvpc. Task shares the host's network namespace — weaker isolation."
+      recommendation: "Set network_mode = \"awsvpc\" for task-level security group assignment"
+      check:
+        op: eq
+        field: network_mode
+        value: awsvpc
+        default: bridge
+
+    - id: ECS-002
+      pillar: SEC
+      severity: HIGH
+      description: "ECS task definition should specify an execution role ARN"
+      message: "No execution_role_arn set. ECR image pulls and Secrets Manager access may use broad permissions."
+      recommendation: "Create a dedicated task execution role with minimum required permissions."
+      check:
+        op: truthy
+        field: execution_role_arn
+
+    - id: ECS-003
+      pillar: SEC
+      severity: HIGH
+      description: "ECS containers should not run as privileged"
+      message: "Container runs with privileged = true. Container can access all host devices."
+      recommendation: "Remove privileged = true; use specific Linux capabilities if needed."
+      check:
+        op: fn
+        name: ecs_no_privileged_containers
+
+  aws_ecs_service:
+    - id: ECS-004
+      pillar: REL
+      severity: MEDIUM
+      description: "ECS service should have multiple tasks for redundancy"
+      message: "desired_count < 2. A single task failure takes down the service."
+      recommendation: "Set desired_count >= 2 and enable circuit breaker"
+      check:
+        op: gte
+        field: desired_count
+        value: 2
+
+    - id: ECS-005
+      pillar: REL
+      severity: MEDIUM
+      description: "ECS service circuit breaker should be enabled"
+      message: "Deployment circuit breaker is not enabled. Bad deployments will keep retrying indefinitely."
+      recommendation: "Set deployment_circuit_breaker { enable = true rollback = true }"
+      check:
+        op: block_is_true
+        block: deployment_circuit_breaker
+        field: enable
+
+  aws_ecs_cluster:
+    - id: ECSC-001
+      pillar: OPS
+      severity: MEDIUM
+      description: "ECS cluster Container Insights should be enabled"
+      message: "Container Insights is not enabled. Cluster-level CPU/memory/network metrics are unavailable."
+      recommendation: "Set setting { name = \"containerInsights\" value = \"enabled\" }"
+      check:
+        op: fn
+        name: ecs_cluster_container_insights
+
+    - id: ECSC-002
+      pillar: OPS
+      severity: LOW
+      description: "ECS cluster execute command logging should be configured"
+      message: "ECS Exec command logging is not configured. Interactive exec sessions leave no audit trail."
+      recommendation: "Set configuration { execute_command_configuration { logging = \"OVERRIDE\" log_configuration { ... } } }"
+      check:
+        op: fn
+        name: ecs_cluster_exec_logging
+
+  aws_eks_cluster:
+    - id: EKS-001
+      pillar: SEC
+      severity: HIGH
+      description: "EKS API server should not be publicly accessible without IP restrictions"
+      message: "EKS API endpoint is public with no CIDR restrictions. Anyone can reach the API server."
+      recommendation: "Set endpoint_private_access = true or restrict public_access_cidrs to known IPs."
+      check:
+        op: fn
+        name: eks_api_not_public_unrestricted
+
+    - id: EKS-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "EKS control plane logging should be enabled"
+      message: "EKS control plane logging is not enabled. API server, audit, and authenticator logs unavailable."
+      recommendation: "Set enabled_cluster_log_types = [\"api\", \"audit\", \"authenticator\", \"controllerManager\", \"scheduler\"]"
+      check:
+        op: truthy
+        field: enabled_cluster_log_types
+
+    - id: EKS-003
+      pillar: SEC
+      severity: HIGH
+      description: "EKS secrets should be encrypted with a KMS key"
+      message: "EKS Kubernetes secrets are not encrypted with a CMK. etcd secrets are only base64-encoded."
+      recommendation: "Add encryption_config { resources = [\"secrets\"] provider { key_arn = ... } }"
+      check:
+        op: fn
+        name: eks_secrets_encrypted
+
+  aws_ecr_repository:
+    - id: ECR-001
+      pillar: SEC
+      severity: HIGH
+      description: "ECR image scanning on push must be enabled"
+      message: "scan_on_push = false. Container images are not scanned for CVEs on push."
+      recommendation: "Set image_scanning_configuration { scan_on_push = true }"
+      check:
+        op: block_is_true
+        block: image_scanning_configuration
+        field: scan_on_push
+
+    - id: ECR-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "ECR image tag immutability should be enforced"
+      message: "image_tag_mutability = MUTABLE. Tags (e.g., 'latest') can be silently overwritten."
+      recommendation: "Set image_tag_mutability = \"IMMUTABLE\" to prevent tag overwrites."
+      check:
+        op: eq
+        field: image_tag_mutability
+        value: IMMUTABLE
+        default: MUTABLE
+
+    - id: ECR-003
+      pillar: SEC
+      severity: LOW
+      description: "ECR repository should be encrypted with a CMK"
+      message: "ECR repository is encrypted with the default AWS-managed key, not a CMK."
+      recommendation: "Set encryption_configuration { encryption_type = \"KMS\" kms_key = <aws_kms_key ARN> }"
+      check:
+        op: block_truthy
+        block: encryption_configuration
+        field: kms_key
+
+    - id: ECR-004
+      pillar: COST
+      severity: INFO
+      description: "ECR repository should have a lifecycle policy to remove old images"
+      message: "No aws_ecr_lifecycle_policy associated. Old/untagged images accumulate and increase storage cost. This cannot be verified from the aws_ecr_repository resource alone — check manually."
+      recommendation: "Create aws_ecr_lifecycle_policy to expire untagged images after 14 days and keep last N tagged."
+      check:
+        op: fn
+        name: always_false
+
+serverless:
+  aws_lambda_function:
+    - id: LAM-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "Lambda function should have a reserved concurrency limit"
+      message: "No reserved_concurrent_executions. Runaway Lambda can exhaust regional concurrency quota."
+      recommendation: "Set reserved_concurrent_executions = <expected max> to protect other functions"
+      check:
+        op: has_key
+        field: reserved_concurrent_executions
+
+    - id: LAM-002
+      pillar: OPS
+      severity: LOW
+      description: "Lambda X-Ray tracing should be enabled"
+      message: "X-Ray tracing mode is PassThrough or not set. End-to-end request tracing is unavailable."
+      recommendation: "Set tracing_config { mode = \"Active\" }"
+      check:
+        op: block_eq
+        block: tracing_config
+        field: mode
+        value: Active
+        default: PassThrough
+
+    - id: LAM-003
+      pillar: REL
+      severity: MEDIUM
+      description: "Lambda should have a dead-letter queue (DLQ) configured"
+      message: "No dead_letter_config set. Failed async invocations are silently discarded."
+      recommendation: "Set dead_letter_config { target_arn = <sqs_queue_arn or sns_topic_arn> }"
+      check:
+        op: block_truthy
+        block: dead_letter_config
+        field: target_arn
+
+    - id: LAM-004
+      pillar: SEC
+      severity: INFO
+      description: "Lambda function should not run in a VPC without proper SG/subnet configuration"
+      message: "Verify VPC-attached Lambda has appropriate security groups and private subnets with NAT."
+      recommendation: "If VPC is needed, configure vpc_config with private subnets and appropriate SG."
+      check:
+        op: fn
+        name: always_true
+
+    - id: LAM-005
+      pillar: COST
+      severity: LOW
+      description: "Lambda timeout should be explicitly and conservatively set"
+      message: "Lambda timeout is either not set or > 60 seconds. Long timeouts waste resources on hangs."
+      recommendation: "Set timeout to the 99th percentile of expected duration + 20% buffer."
+      check:
+        op: fn
+        name: lambda_timeout_reasonable
+
+  aws_sfn_state_machine:
+    - id: SFN-001
+      pillar: OPS
+      severity: MEDIUM
+      description: "Step Functions state machine logging should be enabled (not OFF)"
+      message: "State machine logging level is OFF. Execution history and errors are not persisted to CloudWatch."
+      recommendation: "Set logging_configuration { level = \"ALL\" include_execution_data = true log_destination = ... }"
+      check:
+        op: fn
+        name: sfn_logging_not_off
+
+    - id: SFN-002
+      pillar: OPS
+      severity: LOW
+      description: "Step Functions X-Ray tracing should be enabled"
+      message: "X-Ray tracing is not enabled. End-to-end distributed traces across Lambda/ECS tasks are unavailable."
+      recommendation: "Set tracing_configuration { enabled = true }"
+      check:
+        op: block_is_true
+        block: tracing_configuration
+        field: enabled
+
+    - id: SFN-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "Step Functions state machine should be encrypted with a CMK"
+      message: "State machine uses the default AWS-managed key, not a CMK. Execution data at rest has no dedicated key."
+      recommendation: "Set encryption_configuration { type = \"CUSTOMER_MANAGED_KMS_KEY\" kms_key_id = <aws_kms_key ARN> }"
+      check:
+        op: block_truthy
+        block: encryption_configuration
+        field: kms_key_id
+
+  aws_api_gateway_stage:
+    - id: APIG-001
+      pillar: OPS
+      severity: MEDIUM
+      description: "API Gateway stage access logging should be enabled"
+      message: "No access_log_settings. API request/response logs are not captured."
+      recommendation: "Set access_log_settings { destination_arn = <cloudwatch_log_group_arn> }"
+      check:
+        op: block_truthy
+        block: access_log_settings
+        field: destination_arn
+
+    - id: APIG-002
+      pillar: PERF
+      severity: MEDIUM
+      description: "API Gateway stage should have throttling configured"
+      message: "No throttling limits set. Unprotected endpoints can be overwhelmed by traffic spikes."
+      recommendation: "Set throttling_burst_limit and throttling_rate_limit at stage or method level."
+      check:
+        op: fn
+        name: apig_throttling_configured
+
+    - id: APIG-003
+      pillar: OPS
+      severity: LOW
+      description: "API Gateway stage should have CloudWatch metrics enabled"
+      message: "API Gateway metrics (4xx, 5xx, latency) are not enabled."
+      recommendation: "Set metrics_enabled = true on the stage or default_route_settings."
+      check:
+        op: fn
+        name: apig_metrics_enabled
+
+    - id: APIG-004
+      pillar: SEC
+      severity: INFO
+      description: "API Gateway should have a WAF Web ACL associated"
+      message: "WAF ACL association cannot be verified from the aws_api_gateway_stage resource alone. Check whether aws_wafv2_web_acl_association exists for this stage."
+      recommendation: "Create aws_wafv2_web_acl_association to protect the API from common threats."
+      check:
+        op: fn
+        name: always_false
+
+  aws_api_gateway_v2_stage:
+    - id: APIG2-001
+      pillar: OPS
+      severity: MEDIUM
+      description: "API Gateway v2 stage access logging should be enabled"
+      message: "No access_log_settings. HTTP API request logs are not captured."
+      recommendation: "Set access_log_settings { destination_arn = <cloudwatch_log_group_arn> }"
+      check:
+        op: block_truthy
+        block: access_log_settings
+        field: destination_arn
+
+    - id: APIG2-002
+      pillar: PERF
+      severity: MEDIUM
+      description: "API Gateway v2 stage should have throttling configured"
+      message: "No throttling settings on HTTP API stage."
+      recommendation: "Set default_route_settings { throttling_burst_limit = 1000 throttling_rate_limit = 500 }"
+      check:
+        op: fn
+        name: apig2_throttling_configured
+
+database:
+  aws_db_instance:
+    - id: RDS-001
+      pillar: REL
+      severity: HIGH
+      description: "Multi-AZ must be enabled for high availability"
+      message: "multi_az = false. Single-AZ has no automatic failover — failover takes 1-2 minutes manually."
+      recommendation: "Set multi_az = true"
+      check:
+        op: is_true
+        field: multi_az
+
+    - id: RDS-002
+      pillar: REL
+      severity: HIGH
+      description: "Deletion protection must be enabled"
+      message: "deletion_protection = false. The DB instance can be accidentally deleted."
+      recommendation: "Set deletion_protection = true"
+      check:
+        op: is_true
+        field: deletion_protection
+
+    - id: RDS-003
+      pillar: REL
+      severity: HIGH
+      description: "Final snapshot must not be skipped on deletion"
+      message: "skip_final_snapshot = true. No backup is created on deletion — permanent data loss risk."
+      recommendation: "Set skip_final_snapshot = false and specify final_snapshot_identifier"
+      check:
+        op: not_true
+        field: skip_final_snapshot
+
+    - id: RDS-004
+      pillar: OPS
+      severity: MEDIUM
+      description: "Enhanced Monitoring should be enabled (monitoring_interval > 0)"
+      message: "monitoring_interval = 0 disables Enhanced Monitoring. OS-level metrics (memory, swap, disk I/O) unavailable."
+      recommendation: "Set monitoring_interval = 60 and provide monitoring_role_arn"
+      check:
+        op: gt
+        field: monitoring_interval
+        value: 0
+
+    - id: RDS-005
+      pillar: OPS
+      severity: MEDIUM
+      description: "Performance Insights should be enabled"
+      message: "performance_insights_enabled = false. SQL-level wait analysis and top SQL statements unavailable."
+      recommendation: "Set performance_insights_enabled = true"
+      check:
+        op: is_true
+        field: performance_insights_enabled
+
+    - id: RDS-006
+      pillar: SEC
+      severity: HIGH
+      description: "Storage must be encrypted at rest"
+      message: "RDS storage is not encrypted at rest. Violates SEC05."
+      recommendation: "Set storage_encrypted = true"
+      check:
+        op: is_true
+        field: storage_encrypted
+
+    - id: RDS-007
+      pillar: REL
+      severity: MEDIUM
+      description: "Backup retention period should be >= 7 days"
+      message: "Backup retention < 7 days. Recovery window is too short for most incident investigations."
+      recommendation: "Set backup_retention_period >= 7"
+      check:
+        op: gte
+        field: backup_retention_period
+        value: 7
+
+    - id: RDS-008
+      pillar: SEC
+      severity: LOW
+      description: "Auto minor version upgrade should be enabled"
+      message: "auto_minor_version_upgrade = false. Security patches for minor versions won't apply automatically."
+      recommendation: "Set auto_minor_version_upgrade = true"
+      check:
+        op: not_false
+        field: auto_minor_version_upgrade
+
+    - id: RDS-009
+      pillar: SEC
+      severity: CRITICAL
+      description: "RDS should not be publicly accessible"
+      message: "publicly_accessible = true. RDS instance is reachable from the internet."
+      recommendation: "Set publicly_accessible = false and place RDS in a private subnet."
+      check:
+        op: not_true
+        field: publicly_accessible
+
+    - id: RDS-010
+      pillar: REL
+      severity: LOW
+      description: "Storage autoscaling (max_allocated_storage) should be configured"
+      message: "max_allocated_storage is not set. Storage cannot autoscale — disk full risk under load."
+      recommendation: "Set max_allocated_storage to an appropriate ceiling (e.g., 500)"
+      check:
+        op: gt
+        field: max_allocated_storage
+        value: 0
+
+    - id: RDS-011
+      pillar: COST
+      severity: LOW
+      description: "RDS storage type should be gp3 for cost efficiency"
+      message: "storage_type is not gp3 (default is gp2). gp3 is cheaper and provides configurable IOPS/throughput."
+      recommendation: "Set storage_type = \"gp3\""
+      check:
+        op: eq
+        field: storage_type
+        value: gp3
+        default: gp2
+
+    - id: RDS-012
+      pillar: SEC
+      severity: MEDIUM
+      description: "CA certificate should be updated to rds-ca-rsa2048-g1 or newer"
+      message: "Using an old CA certificate (rds-ca-2015 or rds-ca-2019) that may expire soon."
+      recommendation: "Set ca_cert_identifier = \"rds-ca-rsa2048-g1\" or \"rds-ca-ecc384-g1\""
+      check:
+        op: not_in
+        field: ca_cert_identifier
+        default: rds-ca-rsa2048-g1
+        values:
+          - rds-ca-2015
+          - rds-ca-2019
+
+  aws_rds_cluster:
+    - id: AUR-001
+      pillar: REL
+      severity: HIGH
+      description: "Aurora cluster deletion protection must be enabled"
+      message: "Aurora cluster has deletion_protection = false."
+      recommendation: "Set deletion_protection = true"
+      check:
+        op: is_true
+        field: deletion_protection
+
+    - id: AUR-002
+      pillar: SEC
+      severity: HIGH
+      description: "Aurora cluster storage must be encrypted"
+      message: "Aurora storage is not encrypted at rest."
+      recommendation: "Set storage_encrypted = true"
+      check:
+        op: is_true
+        field: storage_encrypted
+
+    - id: AUR-003
+      pillar: REL
+      severity: MEDIUM
+      description: "Aurora backup retention should be >= 7 days"
+      message: "Aurora backup_retention_period < 7 days."
+      recommendation: "Set backup_retention_period >= 7"
+      check:
+        op: gte
+        field: backup_retention_period
+        value: 7
+
+    - id: AUR-004
+      pillar: SEC
+      severity: INFO
+      description: "Aurora cluster instances should not be publicly accessible"
+      message: "publicly_accessible is controlled on aws_rds_cluster_instance, not aws_rds_cluster. Verify each cluster instance has publicly_accessible = false."
+      recommendation: "Set publicly_accessible = false on each aws_rds_cluster_instance resource."
+      check:
+        op: fn
+        name: always_false
+
+    - id: AUR-005
+      pillar: SEC
+      severity: MEDIUM
+      description: "Aurora should enable IAM database authentication"
+      message: "IAM database authentication is not enabled. Password-only auth increases credential exposure risk."
+      recommendation: "Set iam_database_authentication_enabled = true to allow IAM-based passwordless auth"
+      check:
+        op: truthy
+        field: iam_database_authentication_enabled
+
+  aws_dynamodb_table:
+    - id: DDB-001
+      pillar: REL
+      severity: HIGH
+      description: "DynamoDB point-in-time recovery (PITR) must be enabled"
+      message: "PITR is disabled. Table cannot be restored to an arbitrary second within the last 35 days."
+      recommendation: "Set point_in_time_recovery { enabled = true }"
+      check:
+        op: block_is_true
+        block: point_in_time_recovery
+        field: enabled
+
+    - id: DDB-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "DynamoDB table should be encrypted with a CMK"
+      message: "DynamoDB server-side encryption is not explicitly enabled with a CMK."
+      recommendation: "Set server_side_encryption { enabled = true kms_key_arn = <aws_kms_key ARN> }"
+      check:
+        op: block_is_true
+        block: server_side_encryption
+        field: enabled
+
+    - id: DDB-003
+      pillar: REL
+      severity: HIGH
+      description: "DynamoDB deletion protection should be enabled"
+      message: "deletion_protection_enabled = false. Table can be accidentally deleted."
+      recommendation: "Set deletion_protection_enabled = true"
+      check:
+        op: is_true
+        field: deletion_protection_enabled
+
+    - id: DDB-004
+      pillar: COST
+      severity: INFO
+      description: "DynamoDB should use on-demand or auto-scaling billing"
+      message: "Review billing_mode. PAY_PER_REQUEST (on-demand) is recommended for unpredictable workloads; PROVISIONED with autoscaling for predictable ones."
+      recommendation: "Set billing_mode = \"PAY_PER_REQUEST\" or configure autoscaling with aws_appautoscaling_target."
+      check:
+        op: fn
+        name: always_false
+
+    - id: DDB-005
+      pillar: OPS
+      severity: INFO
+      description: "DynamoDB table should have TTL configured for expiring stale data"
+      message: "No TTL configured. Stale items accumulate, increasing storage costs."
+      recommendation: "Set ttl { enabled = true attribute_name = \"expiry_time\" } where applicable."
+      check:
+        op: block_truthy
+        block: ttl
+        field: attribute_name
+
+    - id: DDB-006
+      pillar: OPS
+      severity: INFO
+      description: "DynamoDB contributor insights should be enabled for large tables"
+      message: "Consider enabling contributor insights to identify hot partitions. Configured via separate aws_dynamodb_contributor_insights resource — verify manually."
+      recommendation: "Enable aws_dynamodb_contributor_insights for tables with high read/write throughput."
+      check:
+        op: fn
+        name: always_false
+
+  aws_elasticache_replication_group:
+    - id: EC-001
+      pillar: SEC
+      severity: HIGH
+      description: "ElastiCache should have at-rest encryption enabled"
+      message: "at_rest_encryption_enabled = false. Cached data is not protected at rest."
+      recommendation: "Set at_rest_encryption_enabled = true"
+      check:
+        op: is_true
+        field: at_rest_encryption_enabled
+
+    - id: EC-002
+      pillar: SEC
+      severity: HIGH
+      description: "ElastiCache should have in-transit encryption enabled"
+      message: "transit_encryption_enabled = false. Data in transit between client and ElastiCache is unencrypted."
+      recommendation: "Set transit_encryption_enabled = true"
+      check:
+        op: is_true
+        field: transit_encryption_enabled
+
+    - id: EC-003
+      pillar: REL
+      severity: HIGH
+      description: "ElastiCache automatic failover should be enabled"
+      message: "automatic_failover_enabled = false. Redis primary failure requires manual promotion."
+      recommendation: "Set automatic_failover_enabled = true (requires num_cache_clusters >= 2)"
+      check:
+        op: is_true
+        field: automatic_failover_enabled
+
+    - id: EC-004
+      pillar: SEC
+      severity: MEDIUM
+      description: "ElastiCache Redis should require auth token"
+      message: "No auth_token set. Redis is accessible without authentication within the VPC."
+      recommendation: "Set auth_token = <random strong password> and store in Secrets Manager"
+      check:
+        op: truthy
+        field: auth_token
+
+  aws_elasticache_cluster:
+    - id: EC-005
+      pillar: PERF
+      severity: LOW
+      description: "ElastiCache node type should not be previous-generation (cache.t2, cache.m3)"
+      message: "Using previous-generation ElastiCache node type."
+      recommendation: "Migrate to cache.t3 or cache.m5/r6g for better performance per cost."
+      check:
+        op: not_startswith
+        field: node_type
+        default: ""
+        prefixes:
+          - "cache.t2."
+          - "cache.m3."
+
+  aws_redshift_cluster:
+    - id: RS-001
+      pillar: SEC
+      severity: HIGH
+      description: "Redshift cluster must be encrypted"
+      message: "Redshift cluster is not encrypted. Data warehouse data stored in plaintext."
+      recommendation: "Set encrypted = true and kms_key_id = <aws_kms_key ARN>"
+      check:
+        op: is_true
+        field: encrypted
+
+    - id: RS-002
+      pillar: SEC
+      severity: CRITICAL
+      description: "Redshift cluster should not be publicly accessible"
+      message: "Redshift cluster is publicly accessible from the internet."
+      recommendation: "Set publicly_accessible = false and place in a private subnet."
+      check:
+        op: not_true
+        field: publicly_accessible
+
+    - id: RS-003
+      pillar: OPS
+      severity: MEDIUM
+      description: "Redshift audit logging should be enabled"
+      message: "Redshift audit logging is disabled. User activity and connection logs are unavailable."
+      recommendation: "Set logging { enable = true bucket_name = <s3_bucket> }"
+      check:
+        op: block_truthy
+        block: logging
+        field: enable
+
+    - id: RS-004
+      pillar: PERF
+      severity: MEDIUM
+      description: "Redshift should use enhanced VPC routing"
+      message: "Enhanced VPC routing is disabled. COPY/UNLOAD traffic may route through the internet."
+      recommendation: "Set enhanced_vpc_routing = true to route traffic through VPC."
+      check:
+        op: is_true
+        field: enhanced_vpc_routing
+
+    - id: RS-005
+      pillar: REL
+      severity: MEDIUM
+      description: "Redshift automated snapshot retention should be >= 7 days"
+      message: "Redshift snapshot retention < 7 days. Recovery window is too short."
+      recommendation: "Set automated_snapshot_retention_period >= 7"
+      check:
+        op: gte
+        field: automated_snapshot_retention_period
+        value: 7
+
+    - id: RS-006
+      pillar: SEC
+      severity: MEDIUM
+      description: "Redshift default database password should be managed via Secrets Manager"
+      message: "master_password is hardcoded in Terraform config. Rotate and move to Secrets Manager."
+      recommendation: "Use manage_master_password = true (Redshift Serverless) or store in Secrets Manager."
+      check:
+        op: fn
+        name: redshift_no_master_password
+
+  aws_opensearch_domain:
+    - id: OS-001
+      pillar: SEC
+      severity: HIGH
+      description: "OpenSearch node-to-node encryption must be enabled"
+      message: "Node-to-node encryption is disabled. Intra-cluster traffic is unencrypted."
+      recommendation: "Set node_to_node_encryption { enabled = true }"
+      check:
+        op: block_is_true
+        block: node_to_node_encryption
+        field: enabled
+
+    - id: OS-002
+      pillar: SEC
+      severity: HIGH
+      description: "OpenSearch encryption at rest must be enabled"
+      message: "Encryption at rest is disabled. Domain data is stored unencrypted."
+      recommendation: "Set encrypt_at_rest { enabled = true }"
+      check:
+        op: block_is_true
+        block: encrypt_at_rest
+        field: enabled
+
+    - id: OS-003
+      pillar: SEC
+      severity: HIGH
+      description: "OpenSearch domain should enforce HTTPS only"
+      message: "enforce_https = false. HTTP connections to OpenSearch are allowed."
+      recommendation: "Set domain_endpoint_options { enforce_https = true tls_security_policy = \"Policy-Min-TLS-1-2-2019-07\" }"
+      check:
+        op: block_is_true
+        block: domain_endpoint_options
+        field: enforce_https
+
+    - id: OS-004
+      pillar: SEC
+      severity: CRITICAL
+      description: "OpenSearch should not be publicly accessible"
+      message: "OpenSearch domain has no vpc_options. Domain may be publicly accessible."
+      recommendation: "Set vpc_options { subnet_ids = [...] security_group_ids = [...] }"
+      check:
+        op: fn
+        name: opensearch_in_vpc
+
+    - id: OS-005
+      pillar: REL
+      severity: MEDIUM
+      description: "OpenSearch should have at least 3 dedicated master nodes"
+      message: "Dedicated master nodes are not enabled. Cluster stability at risk during high indexing load."
+      recommendation: "Set cluster_config { dedicated_master_enabled = true dedicated_master_count = 3 }"
+      check:
+        op: block_is_true
+        block: cluster_config
+        field: dedicated_master_enabled
+
+  aws_elasticsearch_domain:
+    - id: ES-001
+      pillar: SEC
+      severity: HIGH
+      description: "Elasticsearch node-to-node encryption must be enabled"
+      message: "node_to_node_encryption is disabled on Elasticsearch domain."
+      recommendation: "Set node_to_node_encryption { enabled = true } (migrate to OpenSearch is recommended)"
+      check:
+        op: block_is_true
+        block: node_to_node_encryption
+        field: enabled
+
+    - id: ES-002
+      pillar: SEC
+      severity: HIGH
+      description: "Elasticsearch encryption at rest must be enabled"
+      message: "Encryption at rest is disabled."
+      recommendation: "Set encrypt_at_rest { enabled = true }"
+      check:
+        op: block_is_true
+        block: encrypt_at_rest
+        field: enabled
+
+network:
+  aws_vpc:
+    - id: VPC-002
+      pillar: REL
+      severity: LOW
+      description: "VPC DNS hostnames should be enabled"
+      message: "enable_dns_hostnames = false. EC2 instances won't get public DNS names; some AWS services may break."
+      recommendation: "Set enable_dns_hostnames = true"
+      check:
+        op: is_true
+        field: enable_dns_hostnames
+
+    - id: VPC-003
+      pillar: REL
+      severity: MEDIUM
+      description: "VPC DNS support should be enabled"
+      message: "enable_dns_support = false. Route53, VPC Endpoints, and ECS service discovery will not function."
+      recommendation: "Set enable_dns_support = true"
+      check:
+        op: not_false
+        field: enable_dns_support
+
+    - id: VPC-005
+      pillar: COST
+      severity: LOW
+      description: "VPC should have required cost allocation tags"
+      message: "VPC has no tags. Cost allocation and ownership tracking is not possible."
+      recommendation: "Add tags = { Environment = ... Owner = ... CostCenter = ... }"
+      check:
+        op: truthy
+        field: tags
+
+  aws_subnet:
+    - id: NET-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "Subnets should not auto-assign public IPs unless explicitly a public subnet"
+      message: "map_public_ip_on_launch = true. Instances in this subnet get public IPs automatically. Acceptable for intentional public subnets (e.g. NAT Gateway, bastion); suppress if intentional."
+      recommendation: "Set map_public_ip_on_launch = false for private subnets."
+      check:
+        op: not_true
+        field: map_public_ip_on_launch
+
+  aws_vpc_endpoint:
+    - id: NET-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "Interface VPC endpoints should have private DNS enabled"
+      message: "Interface endpoint has private_dns_enabled = false. Services may route traffic through the internet."
+      recommendation: "Set private_dns_enabled = true for Interface endpoints."
+      check:
+        op: fn
+        name: vpc_endpoint_private_dns
+
+  aws_flow_log:
+    - id: VPC-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "VPC Flow Logs traffic type should capture ALL traffic"
+      message: "Flow Logs traffic_type is not ALL. ACCEPT-only or REJECT-only misses half of network activity."
+      recommendation: "Set traffic_type = \"ALL\""
+      check:
+        op: eq
+        field: traffic_type
+        value: ALL
+        default: ALL
+
+    - id: VPC-004
+      pillar: OPS
+      severity: INFO
+      description: "VPC Flow Logs should use a custom format for richer fields"
+      message: "Consider adding log_format with fields like pkt-srcaddr, pkt-dstaddr, flow-direction for deeper analysis."
+      recommendation: "Set log_format to include extended fields: pkt-src-aws-service, pkt-dst-aws-service, etc."
+      check:
+        op: fn
+        name: always_false
+
+  aws_nat_gateway:
+    - id: NGW-001
+      pillar: COST
+      severity: INFO
+      description: "NAT Gateway count should be reviewed for cost"
+      message: "Each NAT Gateway costs ~$32/month + $0.045/GB data processed. Verify the number of NAT Gateways is appropriate for your HA requirements."
+      recommendation: "For non-production environments, consider a single NAT Gateway. For production, one per AZ is recommended."
+      check:
+        op: fn
+        name: always_false
+
+  aws_lb:
+    - id: ALB-001
+      pillar: REL
+      severity: MEDIUM
+      description: "ALB deletion protection should be enabled"
+      message: "ALB deletion protection is disabled. The load balancer can be accidentally removed."
+      recommendation: "Set enable_deletion_protection = true"
+      check:
+        op: is_true
+        field: enable_deletion_protection
+
+    - id: ALB-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "ALB should drop invalid HTTP headers"
+      message: "drop_invalid_header_fields is not set. Protects against HTTP request-smuggling attacks."
+      recommendation: "Set drop_invalid_header_fields = true"
+      check:
+        op: is_true
+        field: drop_invalid_header_fields
+
+    - id: ALB-003
+      pillar: OPS
+      severity: LOW
+      description: "ALB access logs should be enabled"
+      message: "ALB access logging is not enabled. Request-level audit trail is missing."
+      recommendation: "Set access_logs { bucket = ... enabled = true }"
+      check:
+        op: block_is_true
+        block: access_logs
+        field: enabled
+
+    - id: ALB-005
+      pillar: SEC
+      severity: MEDIUM
+      description: "Internet-facing ALB detected — verify this is intentional"
+      message: "ALB is explicitly set to internet-facing (internal = false). If this ALB is intentionally public (e.g. serving end users), this finding can be ignored."
+      recommendation: "Set internal = true for ALBs that do not need public internet access. If intentionally public, add a comment or suppress this finding."
+      check:
+        op: fn
+        name: alb_not_internet_facing
+
+  aws_lb_listener:
+    - id: ALB-004
+      pillar: SEC
+      severity: HIGH
+      description: "ALB listener should use HTTPS or redirect HTTP to HTTPS"
+      message: "Listener is HTTP-only with no HTTPS redirect. Data in transit is unencrypted. Violates SEC05."
+      recommendation: "Use HTTPS (port 443) with an ACM certificate, or add a redirect default_action { type = \"redirect\" redirect { protocol = \"HTTPS\" status_code = \"HTTP_301\" } }"
+      check:
+        op: fn
+        name: alb_listener_https_or_redirect
+
+    - id: ALB-006
+      pillar: SEC
+      severity: MEDIUM
+      description: "HTTPS listener should use a modern SSL policy"
+      message: "HTTPS listener is using a deprecated SSL policy that supports TLS 1.0 or 1.1."
+      recommendation: "Set ssl_policy = \"ELBSecurityPolicy-TLS13-1-2-2021-06\" (TLS 1.3 preferred)"
+      check:
+        op: fn
+        name: alb_listener_modern_ssl_policy
+
+  aws_lb_target_group:
+    - id: TG-001
+      pillar: REL
+      severity: MEDIUM
+      description: "Target group health check should be explicitly configured"
+      message: "No explicit health_check block. Default settings may not reflect actual application health."
+      recommendation: "Define health_check { path = \"/health\" healthy_threshold = 2 unhealthy_threshold = 3 }"
+      check:
+        op: has_key
+        field: health_check
+
+    - id: TG-002
+      pillar: REL
+      severity: LOW
+      description: "Deregistration delay should be tuned for fast deployments"
+      message: "deregistration_delay > 300 seconds. Slow draining extends deployment time unnecessarily."
+      recommendation: "Set deregistration_delay = 30~60 for stateless services"
+      check:
+        op: lte
+        field: deregistration_delay
+        value: 300
+
+    - id: TG-003
+      pillar: PERF
+      severity: INFO
+      description: "Target group should enable stickiness only when required"
+      message: "Verify whether stickiness is needed. Stickiness can unbalance load across targets."
+      recommendation: "Use stickiness only for stateful sessions; prefer stateless design."
+      check:
+        op: fn
+        name: always_false
+
+  aws_route53_health_check:
+    - id: R53-001
+      pillar: REL
+      severity: LOW
+      description: "Route53 health check failure threshold should be 3 or fewer"
+      message: "High failure_threshold delays DNS failover. Default is 3 (60 seconds for 20s interval)."
+      recommendation: "Set failure_threshold = 3 and request_interval = 10 for faster detection."
+      check:
+        op: lte
+        field: failure_threshold
+        value: 3
+
+    - id: R53-002
+      pillar: REL
+      severity: LOW
+      description: "Route53 health check should have CloudWatch alarms"
+      message: "Consider associating a CloudWatch alarm with this health check for proactive alerting."
+      recommendation: "Link health check to aws_cloudwatch_metric_alarm for HealthCheckStatus metric."
+      check:
+        op: fn
+        name: always_true
+
+  aws_route53_record:
+    - id: R53R-001
+      pillar: REL
+      severity: LOW
+      description: "Non-simple Route53 records should have a health_check_id"
+      message: "Failover/weighted/latency routing record has no health_check_id. Unhealthy endpoints may still receive traffic."
+      recommendation: "Set health_check_id = <aws_route53_health_check.id> on all non-simple routing records."
+      check:
+        op: fn
+        name: r53_record_has_health_check
+
+    - id: R53R-002
+      pillar: REL
+      severity: INFO
+      description: "Route53 record TTL should be <= 1 hour for failover agility"
+      message: "Route53 record TTL is very high (> 1 hour). DNS failover during incidents will be slow."
+      recommendation: "Set TTL = 60~300 for records that may need failover. Alias records ignore TTL."
+      check:
+        op: fn
+        name: r53_record_ttl_low
+
+  aws_vpn_connection:
+    - id: VPN-001
+      pillar: SEC
+      severity: INFO
+      description: "VPN connection should use IKEv2 and AES256"
+      message: "Verify VPN tunnel options use IKEv2, AES-256-GCM, SHA-256, and DH Group 14+. Tunnel cipher settings often rely on the peer device and require manual verification."
+      recommendation: "Set tunnel1_ike_versions = [\"ikev2\"] and tunnel1_phase1_encryption_algorithms = [\"AES256-GCM-16\"]"
+      check:
+        op: fn
+        name: always_false
+
+  aws_cloudfront_distribution:
+    - id: CF-001
+      pillar: SEC
+      severity: HIGH
+      description: "CloudFront should use HTTPS-only viewer protocol"
+      message: "CloudFront distribution allows HTTP viewer connections. Data in transit is unencrypted."
+      recommendation: "Set viewer_protocol_policy = \"redirect-to-https\" or \"https-only\""
+      check:
+        op: fn
+        name: cf_https_only
+
+    - id: CF-002
+      pillar: SEC
+      severity: HIGH
+      description: "CloudFront should use TLS 1.2 or later (no SSLv3 or TLS 1.0)"
+      message: "CloudFront allows deprecated SSL/TLS versions (SSLv3, TLS 1.0/1.1)."
+      recommendation: "Set viewer_certificate { minimum_protocol_version = \"TLSv1.2_2021\" }"
+      check:
+        op: fn
+        name: cf_modern_tls
+
+    - id: CF-003
+      pillar: OPS
+      severity: LOW
+      description: "CloudFront access logging should be enabled"
+      message: "CloudFront access logging is not configured. Request-level audit trail is missing."
+      recommendation: "Set logging_config { bucket = ... include_cookies = false prefix = \"cloudfront/\" }"
+      check:
+        op: fn
+        name: cf_access_logging_enabled
+
+    - id: CF-004
+      pillar: SEC
+      severity: MEDIUM
+      description: "CloudFront should not use the default CloudFront certificate for custom domains"
+      message: "Custom domain aliases are set but using the default CloudFront certificate."
+      recommendation: "Set viewer_certificate { acm_certificate_arn = ... ssl_support_method = \"sni-only\" }"
+      check:
+        op: fn
+        name: cf_no_default_cert_with_aliases
+
+storage:
+  aws_s3_bucket:
+    - id: S3-001
+      pillar: REL
+      severity: MEDIUM
+      description: "force_destroy should be false on data-bearing buckets"
+      message: "force_destroy = true. All objects deleted when bucket is destroyed — data loss risk."
+      recommendation: "Set force_destroy = false for buckets holding audit logs or production data"
+      check:
+        op: not_true
+        field: force_destroy
+
+  aws_s3_bucket_versioning:
+    - id: S3-002
+      pillar: REL
+      severity: LOW
+      description: "S3 versioning should be enabled on important buckets"
+      message: "S3 versioning is not enabled. Overwrites and accidental deletes are not recoverable."
+      recommendation: "Set versioning_configuration { status = \"Enabled\" }"
+      check:
+        op: block_eq
+        block: versioning_configuration
+        field: status
+        value: Enabled
+        default: ""
+
+  aws_s3_bucket_server_side_encryption_configuration:
+    - id: S3-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "S3 bucket should have server-side encryption configured"
+      message: "No server-side encryption configuration. Data at rest may be unprotected."
+      recommendation: "Add server_side_encryption_configuration with AES256 or aws:kms"
+      check:
+        op: has_blocks
+        field: rule
+
+  aws_s3_bucket_public_access_block:
+    - id: S3-004
+      pillar: SEC
+      severity: CRITICAL
+      description: "All four public access block settings must be true"
+      message: "One or more public access block settings are not enabled. Bucket may be publicly accessible."
+      recommendation: "Set all four: block_public_acls, block_public_policy, ignore_public_acls, restrict_public_buckets = true"
+      check:
+        op: fn
+        name: s3_all_public_access_blocked
+
+  aws_s3_bucket_lifecycle_configuration:
+    - id: S3-005
+      pillar: COST
+      severity: INFO
+      description: "S3 lifecycle rules should transition or expire objects to reduce cost"
+      message: "No lifecycle configuration found. Objects grow indefinitely and incur increasing storage costs."
+      recommendation: "Add transition to S3-IA after 30 days, Glacier after 90 days, or set expiration."
+      check:
+        op: has_blocks
+        field: rule
+
+  aws_ebs_volume:
+    - id: EBS-001
+      pillar: SEC
+      severity: HIGH
+      description: "Standalone EBS volume must be encrypted"
+      message: "EBS volume is not encrypted. Data at rest is unprotected."
+      recommendation: "Set encrypted = true and optionally kms_key_id for CMK."
+      check:
+        op: is_true
+        field: encrypted
+
+    - id: EBS-002
+      pillar: COST
+      severity: LOW
+      description: "EBS volume type should be gp3 for general workloads"
+      message: "EBS volume is not gp3. gp3 provides better performance per dollar than gp2."
+      recommendation: "Set type = \"gp3\""
+      check:
+        op: eq
+        field: type
+        value: gp3
+        default: gp3
+
+  aws_kinesis_stream:
+    - id: KIN-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "Kinesis stream should be encrypted with a KMS CMK"
+      message: "Kinesis stream is not KMS-encrypted. Stream data at rest is unprotected."
+      recommendation: "Set encryption_type = \"KMS\" and kms_key_id = <aws_kms_key ARN>"
+      check:
+        op: not_in
+        field: encryption_type
+        default: NONE
+        values:
+          - NONE
+
+    - id: KIN-002
+      pillar: OPS
+      severity: LOW
+      description: "Kinesis stream retention should be >= 24 hours (default) and consider extended"
+      message: "Kinesis retention_period < 24 hours. Data may be lost before consumers can process it."
+      recommendation: "Set retention_period >= 24 (up to 8760 hours for extended retention)."
+      check:
+        op: gte
+        field: retention_period
+        value: 24
+
+    - id: KIN-003
+      pillar: OPS
+      severity: LOW
+      description: "Kinesis stream shard-level enhanced metrics should be enabled"
+      message: "No shard-level metrics configured. Cannot detect individual hot/cold shards."
+      recommendation: "Set shard_level_metrics = [\"IncomingBytes\", \"OutgoingBytes\", \"ReadProvisionedThroughputExceeded\"]"
+      check:
+        op: truthy
+        field: shard_level_metrics
+
+  aws_kinesis_firehose_delivery_stream:
+    - id: KFH-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "Kinesis Firehose should encrypt data at rest"
+      message: "Kinesis Firehose server-side encryption is not enabled."
+      recommendation: "Set server_side_encryption { enabled = true key_type = \"CUSTOMER_MANAGED_CMK\" key_arn = ... }"
+      check:
+        op: fn
+        name: kfh_sse_enabled
+
+    - id: KFH-002
+      pillar: OPS
+      severity: MEDIUM
+      description: "Kinesis Firehose should have error logging enabled"
+      message: "Firehose delivery error logging to CloudWatch is not enabled. Delivery failures go unnoticed."
+      recommendation: "Add cloudwatch_logging_options { enabled = true } to the destination configuration."
+      check:
+        op: fn
+        name: kfh_error_logging_enabled
+
+security:
+  aws_security_group:
+    - id: SG-001
+      pillar: SEC
+      severity: CRITICAL
+      description: "No unrestricted ingress on admin/DB ports (22, 3306, 5432, 1433, 27017, 6379)"
+      message: "Security group allows unrestricted 0.0.0.0/0 access on sensitive admin/DB ports."
+      recommendation: "Restrict ingress to specific CIDR blocks or source security groups"
+      check:
+        op: fn
+        name: sg_no_admin_ports_open
+
+    - id: SG-002
+      pillar: SEC
+      severity: CRITICAL
+      description: "No unrestricted ingress on all ports (from_port=0, to_port=0, protocol=-1)"
+      message: "Security group allows ALL traffic from 0.0.0.0/0 (protocol = -1). Completely open ingress."
+      recommendation: "Restrict to specific ports and source CIDR blocks or security groups."
+      check:
+        op: fn
+        name: sg_no_all_traffic_open
+
+    - id: SG-003
+      pillar: SEC
+      severity: LOW
+      description: "Security group description should not be the default placeholder"
+      message: "Security group has no meaningful description. Hard to audit purpose during incident response."
+      recommendation: "Set a descriptive description explaining the SG's purpose and associated resource."
+      check:
+        op: not_in
+        field: description
+        default: ""
+        values:
+          - ""
+          - "Managed by Terraform"
+          - "default"
+
+  aws_security_group_rule:
+    - id: SGR-001
+      pillar: SEC
+      severity: CRITICAL
+      description: "Standalone SG rule must not allow 0.0.0.0/0 on admin/DB ports"
+      message: "Security group rule allows unrestricted 0.0.0.0/0 ingress on a sensitive admin/DB port."
+      recommendation: "Restrict cidr_blocks to specific known CIDR ranges or use source_security_group_id."
+      check:
+        op: fn
+        name: sgr_no_admin_ports_open
+
+    - id: SGR-002
+      pillar: SEC
+      severity: CRITICAL
+      description: "Standalone SG rule must not allow all traffic from 0.0.0.0/0 (protocol=-1)"
+      message: "Security group rule allows ALL ingress traffic from 0.0.0.0/0 (protocol=-1). Completely open."
+      recommendation: "Restrict to specific protocols, ports, and source CIDR blocks."
+      check:
+        op: fn
+        name: sgr_no_all_traffic_open
+
+    - id: SGR-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "Egress rule should not allow unrestricted outbound to all ports"
+      message: "Security group rule allows all egress traffic to 0.0.0.0/0. Consider restricting outbound."
+      recommendation: "Restrict egress to specific protocols and ports required by the application."
+      check:
+        op: fn
+        name: sgr_no_unrestricted_egress
+
+  aws_iam_role:
+    - id: IAM-001
+      pillar: SEC
+      severity: CRITICAL
+      description: "IAM role assume_role_policy should not allow all principals (*)"
+      message: "assume_role_policy allows any AWS principal (*). Any AWS account can assume this role."
+      recommendation: "Restrict Principal to specific account IDs, roles, or services."
+      check:
+        op: fn
+        name: iam_no_wildcard_principal
+
+    - id: IAM-002
+      pillar: SEC
+      severity: LOW
+      description: "IAM role should have a meaningful description"
+      message: "IAM role has no description. Hard to audit purpose during access reviews."
+      recommendation: "Set description = \"Purpose of this role and which service/team uses it\""
+      check:
+        op: fn
+        name: iam_role_description_set
+
+    - id: IAM-003
+      pillar: SEC
+      severity: LOW
+      description: "IAM role max_session_duration should be <= 4 hours"
+      message: "max_session_duration > 4 hours. Long-lived credentials increase blast radius if compromised."
+      recommendation: "Set max_session_duration <= 14400 (4 hours) for interactive roles"
+      check:
+        op: lte
+        field: max_session_duration
+        value: 14400
+
+  aws_iam_policy:
+    - id: IAM-004
+      pillar: SEC
+      severity: HIGH
+      description: "IAM policy should not use wildcard Action (*) on sensitive services"
+      message: "IAM policy contains Action: '*' (all actions). Violates least-privilege principle (SEC01)."
+      recommendation: "Enumerate only the specific actions required (e.g., s3:GetObject, rds:DescribeDBInstances)."
+      check:
+        op: fn
+        name: iam_no_wildcard_action
+
+  aws_iam_role_policy:
+    - id: IAM-005
+      pillar: SEC
+      severity: HIGH
+      description: "Inline IAM policy should not use wildcard Action on sensitive services"
+      message: "Inline policy contains Action: '*'. Least-privilege principle violated."
+      recommendation: "Replace '*' with specific required actions."
+      check:
+        op: fn
+        name: iam_inline_no_wildcard_action
+
+  aws_iam_policy_attachment:
+    - id: IAMA-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "aws_iam_policy_attachment is exclusive and should be replaced with targeted attachment resources"
+      message: "aws_iam_policy_attachment is an exclusive resource — it will silently detach the policy from any user/role/group not in its lists. This causes unexpected permission loss in shared environments."
+      recommendation: "Replace with aws_iam_role_policy_attachment, aws_iam_user_policy_attachment, or aws_iam_group_policy_attachment for non-exclusive, safe attachment."
+      check:
+        op: fn
+        name: always_false
+
+  aws_iam_role_policy_attachment:
+    - id: IAMRPA-001
+      pillar: SEC
+      severity: HIGH
+      description: "IAM role should not attach overly broad AWS managed policies"
+      message: "IAM role is attached to an overly broad AWS managed policy (AdministratorAccess / PowerUserAccess / IAMFullAccess)."
+      recommendation: "Replace with a least-privilege inline or customer-managed policy scoped to required actions."
+      check:
+        op: fn
+        name: iam_rpa_no_broad_policies
+
+  aws_kms_key:
+    - id: KMS-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "KMS key automatic rotation should be enabled"
+      message: "KMS key rotation is disabled. Key material is never rotated, increasing exposure window."
+      recommendation: "Set enable_key_rotation = true (annual rotation for symmetric keys)"
+      check:
+        op: is_true
+        field: enable_key_rotation
+
+    - id: KMS-002
+      pillar: SEC
+      severity: LOW
+      description: "KMS key should have a descriptive description"
+      message: "KMS key has no description. Hard to identify purpose during key management audits."
+      recommendation: "Set description = \"Purpose and associated resource of this key\""
+      check:
+        op: fn
+        name: iam_kms_description_set
+
+    - id: KMS-003
+      pillar: REL
+      severity: MEDIUM
+      description: "KMS key deletion window should be maximum (30 days)"
+      message: "deletion_window_in_days < 14. Short window risks unrecoverable accidental key deletion."
+      recommendation: "Set deletion_window_in_days = 30"
+      check:
+        op: gte
+        field: deletion_window_in_days
+        value: 14
+
+  aws_secretsmanager_secret:
+    - id: SM-001
+      pillar: REL
+      severity: MEDIUM
+      description: "Secret recovery window should be >= 7 days"
+      message: "recovery_window_in_days = 0 allows immediate unrecoverable deletion."
+      recommendation: "Set recovery_window_in_days = 7 minimum"
+      check:
+        op: gte
+        field: recovery_window_in_days
+        value: 7
+
+    - id: SM-002
+      pillar: SEC
+      severity: LOW
+      description: "Secrets Manager secret should be encrypted with a CMK"
+      message: "Secret is encrypted with the default AWS-managed key, not a customer-managed KMS key."
+      recommendation: "Set kms_key_id = <aws_kms_key ARN> for dedicated key control and audit trail"
+      check:
+        op: truthy
+        field: kms_key_id
+
+  aws_guardduty_detector:
+    - id: GD-001
+      pillar: SEC
+      severity: HIGH
+      description: "GuardDuty detector must be enabled"
+      message: "GuardDuty is not active. ML-based threat detection (recon, crypto-mining, credential theft) is off."
+      recommendation: "Set enable = true (default is true; explicitly set to avoid accidental disable)"
+      check:
+        op: not_false
+        field: enable
+
+    - id: GD-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "GuardDuty S3 protection should be enabled"
+      message: "GuardDuty S3 data event monitoring is not enabled. S3-based threats go undetected."
+      recommendation: "Set datasources { s3_logs { enable = true } }"
+      check:
+        op: fn
+        name: guardduty_s3_protection_enabled
+
+    - id: GD-003
+      pillar: SEC
+      severity: INFO
+      description: "GuardDuty EKS protection should be enabled if EKS is used"
+      message: "Verify GuardDuty EKS audit log monitoring is enabled if EKS clusters are present. Cannot be verified from the aws_guardduty_detector resource alone."
+      recommendation: "Set datasources { kubernetes { audit_logs { enable = true } } }"
+      check:
+        op: fn
+        name: always_false
+
+  aws_securityhub_account:
+    - id: SH-001
+      pillar: SEC
+      severity: INFO
+      description: "Security Hub auto-enable controls should be set"
+      message: "Verify Security Hub has standards subscriptions (CIS, FSBP) and auto-remediation enabled."
+      recommendation: "Add aws_securityhub_standards_subscription for CIS 1.4.0 and FSBP."
+      check:
+        op: fn
+        name: always_false
+
+  aws_macie2_account:
+    - id: MAC-001
+      pillar: SEC
+      severity: LOW
+      description: "Amazon Macie should be enabled for S3 data classification"
+      message: "Macie is not enabled. PII and sensitive data in S3 buckets goes undetected."
+      recommendation: "Set status = \"ENABLED\" and configure aws_macie2_classification_job for critical buckets."
+      check:
+        op: eq
+        field: status
+        value: ENABLED
+        default: ENABLED
+
+  aws_wafv2_web_acl:
+    - id: WAF-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "WAFv2 Web ACL should have at least one rule"
+      message: "WAFv2 Web ACL has no rules. All requests pass through without inspection."
+      recommendation: "Add AWS managed rule groups: AWSManagedRulesCommonRuleSet, AWSManagedRulesKnownBadInputsRuleSet"
+      check:
+        op: fn
+        name: waf_has_rules
+
+    - id: WAF-002
+      pillar: OPS
+      severity: INFO
+      description: "WAFv2 should have logging enabled"
+      message: "Verify WAFv2 has aws_wafv2_web_acl_logging_configuration associated. Blocked requests should be logged. Logging is configured via a separate resource and cannot be verified here."
+      recommendation: "Create aws_wafv2_web_acl_logging_configuration pointing to Kinesis Firehose or S3."
+      check:
+        op: fn
+        name: always_false
+
+  aws_cloudtrail:
+    - id: CT-001
+      pillar: SEC
+      severity: HIGH
+      description: "CloudTrail must be multi-region"
+      message: "Single-region CloudTrail. API activity in other regions is not recorded."
+      recommendation: "Set is_multi_region_trail = true"
+      check:
+        op: is_true
+        field: is_multi_region_trail
+
+    - id: CT-002
+      pillar: SEC
+      severity: HIGH
+      description: "Log file validation must be enabled (tamper detection)"
+      message: "Log file validation disabled. Deleted or modified CloudTrail logs cannot be detected."
+      recommendation: "Set enable_log_file_validation = true"
+      check:
+        op: is_true
+        field: enable_log_file_validation
+
+    - id: CT-003
+      pillar: SEC
+      severity: MEDIUM
+      description: "CloudTrail logs should be KMS-encrypted"
+      message: "CloudTrail logs are not KMS-encrypted. SSE-S3 only."
+      recommendation: "Set kms_key_id = <aws_kms_key ARN>"
+      check:
+        op: truthy
+        field: kms_key_id
+
+    - id: CT-004
+      pillar: SEC
+      severity: MEDIUM
+      description: "Global service events (IAM, STS, Route53) must be captured"
+      message: "include_global_service_events = false. IAM, STS, and Route53 API calls are not logged."
+      recommendation: "Set include_global_service_events = true (default is true; explicitly set to avoid accidental disable)"
+      check:
+        op: not_false
+        field: include_global_service_events
+
+    - id: CT-005
+      pillar: OPS
+      severity: MEDIUM
+      description: "CloudTrail should be delivered to CloudWatch Logs for real-time alerting"
+      message: "CloudTrail is not delivering to CloudWatch Logs. Real-time metric filters and alarms cannot be set."
+      recommendation: "Set cloud_watch_logs_group_arn and cloud_watch_logs_role_arn"
+      check:
+        op: truthy
+        field: cloud_watch_logs_group_arn
+
+  aws_acm_certificate:
+    - id: ACM-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "ACM certificate validation method should be DNS (not EMAIL)"
+      message: "Certificate uses EMAIL validation. DNS validation is automated and does not expire."
+      recommendation: "Set validation_method = \"DNS\" and create aws_acm_certificate_validation with Route53."
+      check:
+        op: eq
+        field: validation_method
+        value: DNS
+        default: DNS
+
+    - id: ACM-002
+      pillar: SEC
+      severity: LOW
+      description: "ACM certificate should have certificate transparency logging enabled"
+      message: "Certificate transparency logging is disabled. Mis-issued certs cannot be detected via CT logs."
+      recommendation: "Set options { certificate_transparency_logging_preference = \"ENABLED\" } (default)"
+      check:
+        op: block_eq
+        block: options
+        field: certificate_transparency_logging_preference
+        value: ENABLED
+        default: ENABLED
+
+operations:
+  aws_cloudwatch_log_group:
+    - id: CW-001
+      pillar: COST
+      severity: LOW
+      description: "CloudWatch log group retention should be explicitly set"
+      message: "No retention policy — logs stored indefinitely, increasing CloudWatch costs."
+      recommendation: "Set retention_in_days (e.g., 30 for operational, 365 for security/compliance logs)"
+      check:
+        op: gt
+        field: retention_in_days
+        value: 0
+
+    - id: CW-002
+      pillar: SEC
+      severity: LOW
+      description: "CloudWatch log group should be KMS-encrypted"
+      message: "CloudWatch log group is not KMS-encrypted. Logs use AWS-managed keys only."
+      recommendation: "Set kms_key_id = <aws_kms_key ARN>"
+      check:
+        op: truthy
+        field: kms_key_id
+
+  aws_cloudwatch_metric_alarm:
+    - id: CWA-001
+      pillar: OPS
+      severity: MEDIUM
+      description: "CloudWatch alarm must have at least one action configured"
+      message: "CloudWatch alarm has no actions. Alarm fires but no one is notified."
+      recommendation: "Set alarm_actions = [<sns_topic_arn>]"
+      check:
+        op: fn
+        name: cwa_has_action
+
+    - id: CWA-002
+      pillar: OPS
+      severity: LOW
+      description: "Alarm evaluation period should be reasonable (not too short or long)"
+      message: "evaluation_periods is outside recommended range (1-10). May cause too many or too few alerts."
+      recommendation: "Set evaluation_periods = 2~3 for a balance between sensitivity and false positives."
+      check:
+        op: fn
+        name: cwa_evaluation_periods_reasonable
+
+  aws_cloudwatch_dashboard:
+    - id: DASH-001
+      pillar: OPS
+      severity: INFO
+      description: "CloudWatch dashboard is defined (good practice)"
+      message: "Dashboard exists. Verify it covers all critical services and SLI/SLO metrics."
+      recommendation: "Include latency (p50/p99), error rates, saturation (CPU/memory), and traffic metrics."
+      check:
+        op: fn
+        name: always_true
+
+  aws_config_configuration_recorder:
+    - id: CFG-001
+      pillar: OPS
+      severity: MEDIUM
+      description: "AWS Config recorder should record all resource types"
+      message: "AWS Config is not recording all supported resource types. Configuration drift goes undetected."
+      recommendation: "Set recording_group { all_supported = true include_global_resource_types = true }"
+      check:
+        op: block_is_true
+        block: recording_group
+        field: all_supported
+
+  aws_config_delivery_channel:
+    - id: CFG-002
+      pillar: OPS
+      severity: LOW
+      description: "AWS Config delivery channel snapshot frequency should be 24h or less"
+      message: "Config snapshot delivery frequency is not set or outside expected values."
+      recommendation: "Set snapshot_delivery_properties { delivery_frequency = \"TwentyFour_Hours\" }"
+      check:
+        op: fn
+        name: config_delivery_frequency_valid
+
+  aws_backup_plan:
+    - id: BAK-001
+      pillar: REL
+      severity: MEDIUM
+      description: "Backup plan rules should include a lifecycle configuration"
+      message: "Backup plan has no lifecycle rules. Old backups are kept indefinitely (cost) or deleted too soon (risk)."
+      recommendation: "Add lifecycle { cold_storage_after = 30 delete_after = 365 } to backup rules."
+      check:
+        op: fn
+        name: backup_has_lifecycle
+
+    - id: BAK-002
+      pillar: REL
+      severity: INFO
+      description: "Backup plan should have a recovery point in multiple regions"
+      message: "Consider enabling cross-region backup copy for critical workloads (REL02). Cross-region destination vault cannot be verified statically."
+      recommendation: "Add copy_action { destination_vault_arn = <arn in secondary region> } to backup rules."
+      check:
+        op: fn
+        name: always_false
+
+  aws_ssm_parameter:
+    - id: SSM-001
+      pillar: SEC
+      severity: HIGH
+      description: "Sensitive SSM parameters should use SecureString type"
+      message: "SSM parameter name suggests sensitive data but type is not SecureString."
+      recommendation: "Set type = \"SecureString\" and specify key_id for KMS encryption"
+      check:
+        op: fn
+        name: ssm_secure_string_for_sensitive
+
+messaging:
+  aws_sns_topic:
+    - id: SNS-001
+      pillar: SEC
+      severity: LOW
+      description: "SNS topic should be encrypted with KMS"
+      message: "SNS topic is not KMS-encrypted. Messages at rest are not protected by a CMK."
+      recommendation: "Set kms_master_key_id = <aws_kms_key ARN or alias>"
+      check:
+        op: truthy
+        field: kms_master_key_id
+
+  aws_sns_topic_subscription:
+    - id: SNSS-001
+      pillar: REL
+      severity: LOW
+      description: "SNS subscription should have a dead-letter queue (redrive_policy)"
+      message: "No redrive_policy on SNS subscription. Failed message deliveries are silently discarded."
+      recommendation: "Set redrive_policy = jsonencode({ deadLetterTargetArn = <sqs_queue_arn> })"
+      check:
+        op: truthy
+        field: redrive_policy
+
+    - id: SNSS-002
+      pillar: SEC
+      severity: INFO
+      description: "HTTPS SNS subscriptions should have delivery status logging enabled"
+      message: "Verify SNS topic has delivery status logging enabled (on the aws_sns_topic side) for this subscription protocol."
+      recommendation: "Set <protocol>_success_feedback_role_arn and <protocol>_failure_feedback_role_arn on aws_sns_topic."
+      check:
+        op: fn
+        name: always_false
+
+  aws_sqs_queue:
+    - id: SQS-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "SQS queue should be encrypted with a KMS CMK"
+      message: "SQS queue is not KMS-encrypted with a CMK. Messages use AWS-managed SSE-SQS only."
+      recommendation: "Set kms_master_key_id = <aws_kms_key ARN or alias/aws/sqs>"
+      check:
+        op: truthy
+        field: kms_master_key_id
+
+    - id: SQS-002
+      pillar: REL
+      severity: MEDIUM
+      description: "SQS queue should have a Dead Letter Queue configured"
+      message: "No redrive_policy (DLQ) configured. Unprocessable messages are silently discarded."
+      recommendation: "Set redrive_policy = jsonencode({ deadLetterTargetArn = ..., maxReceiveCount = 3 })"
+      check:
+        op: fn
+        name: sqs_has_dlq
+
+    - id: SQS-003
+      pillar: SEC
+      severity: CRITICAL
+      description: "SQS queue policy should not allow public access"
+      message: "SQS queue policy allows access from any principal (*). Queue is publicly accessible."
+      recommendation: "Restrict Principal to specific AWS account IDs or IAM roles."
+      check:
+        op: fn
+        name: sqs_no_public_policy
+
+  aws_msk_cluster:
+    - id: MSK-001
+      pillar: SEC
+      severity: HIGH
+      description: "MSK cluster should enforce TLS in-transit encryption"
+      message: "MSK client_broker encryption allows PLAINTEXT. Kafka traffic may travel unencrypted."
+      recommendation: "Set encryption_info { encryption_in_transit { client_broker = \"TLS\" } }"
+      check:
+        op: fn
+        name: msk_tls_in_transit
+
+    - id: MSK-002
+      pillar: SEC
+      severity: MEDIUM
+      description: "MSK cluster broker storage should be encrypted with a CMK"
+      message: "MSK broker EBS volumes are not encrypted with a CMK."
+      recommendation: "Set encryption_info { encryption_at_rest { data_volume_kms_key_id = <kms_key_arn> } }"
+      check:
+        op: fn
+        name: msk_at_rest_cmk
+
+    - id: MSK-003
+      pillar: OPS
+      severity: MEDIUM
+      description: "MSK broker logs should be shipped to CloudWatch/S3"
+      message: "MSK broker logs are not configured. Kafka broker errors and warnings are unobservable."
+      recommendation: "Set logging_info { broker_logs { cloudwatch_logs { enabled = true log_group = ... } } }"
+      check:
+        op: fn
+        name: msk_broker_logs_enabled
+
+    - id: MSK-004
+      pillar: SEC
+      severity: HIGH
+      description: "MSK should require client authentication (TLS or SASL)"
+      message: "MSK has no client authentication configured. Any client in the VPC can connect."
+      recommendation: "Configure client_authentication with TLS mutual auth or SASL/SCRAM or SASL/IAM."
+      check:
+        op: fn
+        name: msk_client_auth_configured
+
+cicd:
+  aws_codebuild_project:
+    - id: CB-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "CodeBuild project artifacts should be encrypted"
+      message: "CodeBuild artifact encryption is disabled. Build outputs are stored unencrypted in S3."
+      recommendation: "Set artifacts { encryption_disabled = false } (default is false; explicitly set to avoid accidental disable)"
+      check:
+        op: fn
+        name: cb_artifacts_encrypted
+
+    - id: CB-002
+      pillar: SEC
+      severity: HIGH
+      description: "CodeBuild project should not run builds in privileged mode"
+      message: "privileged_mode = true in CodeBuild environment. Containers run with elevated host access."
+      recommendation: "Set environment { privileged_mode = false } unless building Docker images (justify and document)."
+      check:
+        op: fn
+        name: cb_not_privileged
+
+    - id: CB-003
+      pillar: SEC
+      severity: LOW
+      description: "CodeBuild project should run inside a VPC for network isolation"
+      message: "CodeBuild project is not running inside a VPC. Build environment has internet-exposed networking."
+      recommendation: "Set vpc_config { vpc_id = ... subnets = [...] security_group_ids = [...] }"
+      check:
+        op: block_truthy
+        block: vpc_config
+        field: vpc_id
+
+    - id: CB-004
+      pillar: OPS
+      severity: MEDIUM
+      description: "CodeBuild logs should be sent to CloudWatch or S3"
+      message: "CodeBuild logs are not configured. Build output and errors are not persisted."
+      recommendation: "Set logs_config { cloudwatch_logs { group_name = ... stream_name = ... } }"
+      check:
+        op: fn
+        name: cb_logs_configured
+
+  aws_codedeploy_deployment_group:
+    - id: CD-001
+      pillar: REL
+      severity: MEDIUM
+      description: "CodeDeploy deployment group should have auto rollback configured"
+      message: "Auto rollback is not enabled. Failed deployments require manual intervention to recover."
+      recommendation: "Set auto_rollback_configuration { enabled = true events = [\"DEPLOYMENT_FAILURE\"] }"
+      check:
+        op: block_is_true
+        block: auto_rollback_configuration
+        field: enabled
+
+    - id: CD-002
+      pillar: REL
+      severity: INFO
+      description: "CodeDeploy ECS/Lambda deployment should use blue/green strategy"
+      message: "Verify deployment_style is BLUE_GREEN for ECS/Lambda deployments to minimize downtime. Applicability depends on compute type (ECS/Lambda vs EC2) — verify manually."
+      recommendation: "Set deployment_style { deployment_option = \"WITH_TRAFFIC_CONTROL\" deployment_type = \"BLUE_GREEN\" }"
+      check:
+        op: fn
+        name: always_false
+
+    - id: CD-003
+      pillar: OPS
+      severity: LOW
+      description: "CodeDeploy deployment group should have CloudWatch alarm monitoring"
+      message: "No CloudWatch alarm_configuration on deployment group. Failed deployments may go undetected."
+      recommendation: "Set alarm_configuration { enabled = true alarms = [<cloudwatch_alarm_name>] }"
+      check:
+        op: block_truthy
+        block: alarm_configuration
+        field: alarms
+
+  aws_codepipeline:
+    - id: CP-001
+      pillar: SEC
+      severity: MEDIUM
+      description: "CodePipeline artifact store should be encrypted with a CMK"
+      message: "CodePipeline artifact store does not use a KMS CMK. Artifacts use the default S3 SSE key."
+      recommendation: "Set artifact_store { encryption_key { id = <kms_key_arn> type = \"KMS\" } }"
+      check:
+        op: fn
+        name: cp_artifact_store_encrypted
+
+    - id: CP-002
+      pillar: OPS
+      severity: INFO
+      description: "CodePipeline should have at least 3 stages (Source, Build, Deploy)"
+      message: "Pipeline has fewer than 3 stages. A minimal pipeline typically needs Source, Build, and Deploy."
+      recommendation: "Ensure pipeline has stages for source, build, test, and deploy."
+      check:
+        op: fn
+        name: cp_has_three_stages

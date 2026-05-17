@@ -125,11 +125,14 @@ def _resolve_check(spec: dict):
 
 
 def load_rules() -> dict:
-    """Load all *.yml files from rules/ and return the TERRAFORM_RULES dict."""
+    """Load rules/rules.yml and return the TERRAFORM_RULES dict."""
+    rules_file = _RULES_DIR / "rules.yml"
+    data = yaml.safe_load(rules_file.read_text(encoding="utf-8"))
     result = {}
-    for path in sorted(_RULES_DIR.glob("*.yml")):
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        for resource_type, rules in (data.get("resources") or {}).items():
+    for _category, resources in data.items():
+        if not isinstance(resources, dict):
+            continue
+        for resource_type, rules in resources.items():
             rule_list = []
             for raw in rules:
                 rule = dict(raw)
