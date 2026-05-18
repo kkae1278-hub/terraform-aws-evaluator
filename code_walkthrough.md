@@ -1,6 +1,6 @@
 # Python コード手順解説
 
-各 `.py` ファイルが何を・どの順番で・どのように実行しているかを1ステップずつ説明します。
+各ファイルが何を・どの順番で・どのように実行しているかを1ステップずつ説明します。
 
 ---
 
@@ -9,51 +9,128 @@
 ```
 python main.py --dir ./terraform
         │
+        ▼ ステップ0（インポート時・1回のみ）
+   rule_loader.load_rules()  ← rule_loader.py
+   ┌─────────────────────────────────────────┐
+   │ 0-1: rules/rules.yml を YAML で読み込み  │
+   │ 0-2: DSL を解釈してチェック関数を生成    │
+   │ 0-3: TERRAFORM_RULES 辞書を構築         │
+   └─────────────────────────────────────────┘
+        │
         ▼ ステップ1
    CLI 引数を解析（argparse）
+   --dir / --output / --output-html / --min-severity
         │
         ▼ ステップ2
    parse_tf_directory()   ← hcl_parser.py
    ┌─────────────────────────────────┐
    │ 2-1: .tf ファイル一覧を取得      │
-   │ 2-2: 変数のデフォルト値を収集    │
+   │ 2-2: 変数デフォルト値を収集      │
    │ 2-3: リソースブロックを収集      │
-   │ 2-4: 引用符の除去               │
-   │ 2-5: var.X 参照を解決           │
+   │ 2-4: var.X 参照を実際の値に解決 │
    └─────────────────────────────────┘
         │
         ▼ ステップ3
    evaluate_static()      ← evaluator.py
-   ┌─────────────────────────────────┐
-   │ 3-1: リソースタイプごとにルール取得│
-   │ 3-2: check() を実行             │
-   │ 3-3: 違反を Finding に記録       │
-   │ 3-4: スコアを減点               │
-   └─────────────────────────────────┘
+   ┌──────────────────────────────────────┐
+   │ 3-1: リソースタイプごとにルール取得   │
+   │ 3-2: check(config) を呼び出し        │
+   │ 3-3: 違反を Finding に記録           │
+   │ 3-4: スコアを減点                    │
+   └──────────────────────────────────────┘
         │
-        ▼ ステップ4（--live 指定時のみ）
-   compare_live()         ← evaluator.py
-   ┌─────────────────────────────────┐
-   │ 4-1: boto3 セッション作成        │
-   │ 4-2: EC2/RDS/ALB/SG/CT/GD/S3   │
-   │      を AWS API で取得           │
-   │ 4-3: 設定不備・ドリフトを記録    │
-   └─────────────────────────────────┘
-        │
-        ▼ ステップ5
+        ▼ ステップ4
    重大度フィルタリング（--min-severity）
         │
-        ▼ ステップ6
+        ▼ ステップ5
    generate_report() でターミナル出力
         │
-        ▼ ステップ7a（--output 指定時）
-   JSON ファイルに保存
+        ├─ ▼ ステップ6a（--output 指定時）
+        │  JSON ファイルに保存
         │
-        ▼ ステップ7b（--output-html 指定時）
-   generate_html_report() で HTML ファイルに保存
-        │
-        ▼ ステップ8
-   終了コード（CRITICAL/HIGH があれば exit 1）
+        └─ ▼ ステップ6b（--output-html 指定時）
+           generate_html_report() で HTML ファイルに保存
+                │
+                ▼ ステップ7
+           終了コード（CRITICAL/HIGH があれば exit 1）
+```
+
+---
+
+## ステップ0 — ルール定義の読み込み（`rule_loader.py`）
+
+`reference.py` を `import` した瞬間に `load_rules()` が呼ばれ、以後のすべての評価で使われる `TERRAFORM_RULES` が構築されます。
+
+### 0-1: YAML ファイルの読み込み
+
+```python
+rules_file = Path(__file__).parent / "rules" / "rules.yml"
+data = yaml.safe_load(rules_file.read_text(encoding="utf-8"))
+```
+
+`rules/rules.yml` は1ファイルで、カテゴリをトップキーとした構造になっています:
+
+```yaml
+compute:
+  aws_instance:
+    - id: EC2-001
+      pillar: SEC
+      severity: HIGH
+      description: "..."
+      message: "..."
+      recommendation: "..."
+      check:
+        op: block_eq
+        block: metadata_options
+        field: http_tokens
+        value: required
+```
+
+### 0-2: DSL の解釈とチェック関数の生成
+
+```python
+for _category, resources in data.items():       # compute, database, ... をループ
+    for resource_type, rules in resources.items():
+        for raw in rules:
+            rule = dict(raw)
+            rule["check"] = _resolve_check(rule.pop("check"))
+```
+
+`_resolve_check` が YAML の `check:` ブロックを Python 関数に変換します。
+
+**シンプルな変換例（DSL）:**
+```yaml
+check:
+  op: is_true
+  field: monitoring
+```
+→ `lambda c: c.get("monitoring") is True`
+
+```yaml
+check:
+  op: block_eq
+  block: metadata_options
+  field: http_tokens
+  value: required
+```
+→ `lambda c: _block(c, "metadata_options").get("http_tokens") == "required"`
+
+**複雑なチェック（fn）:**
+```yaml
+check:
+  op: fn
+  name: sg_no_admin_ports_open
+```
+→ `checks.sg_no_admin_ports_open`（`checks.py` の関数を直接参照）
+
+### 0-3: TERRAFORM_RULES の完成
+
+```python
+result = {
+    "aws_instance":    [{"id": "EC2-001", "check": <func>, ...}, ...],
+    "aws_db_instance": [{"id": "RDS-001", "check": <func>, ...}, ...],
+    ...  # 72 リソースタイプ / 188 ルール
+}
 ```
 
 ---
@@ -61,28 +138,31 @@ python main.py --dir ./terraform
 ## ステップ1 — CLI 引数の解析（`main.py`）
 
 ```python
-parser = argparse.ArgumentParser(...)
 parser.add_argument("--dir",          default="../terraform")
-parser.add_argument("--live",         action="store_true")
-parser.add_argument("--region",       default="ap-northeast-1")
-parser.add_argument("--profile",      default=None)
-parser.add_argument("--output",       default=None)   # JSON 出力先
-parser.add_argument("--output-html",  default=None)   # HTML 出力先
+parser.add_argument("--output",       default=None)
+parser.add_argument("--output-html",  default=None)
 parser.add_argument("--min-severity", default="LOW")
 args = parser.parse_args()
 ```
 
-**何をしているか**
-`argparse` がコマンドライン引数を読み取り、`args` オブジェクトに格納します。
-`--live` は `store_true` なのでフラグが付いたとき `True`、なければ `False` になります。
+| 引数 | デフォルト | 効果 |
+|---|---|---|
+| `--dir` | `../terraform` | 評価対象ディレクトリ |
+| `--output` | なし | JSON レポートを保存 |
+| `--output-html` | なし | HTML レポートを保存 |
+| `--min-severity` | `LOW` | この重大度未満の Finding を非表示 |
+
+```python
+tf_dir = str(Path(args.dir).resolve())
+```
+- 相対パスを絶対パスに変換。`../terraform` のような指定でも確実に動作する。
 
 ---
 
-## ステップ2 — .tf ファイルの解析（`hcl_parser.py`）
+## ステップ2 — `.tf` ファイルの解析（`hcl_parser.py`）
 
-> **前提:** `python-hcl2` が必須です（`pip install python-hcl2`）。
-> 未インストールの場合はモジュール読み込み時点でエラーを出力して終了します。
-> 正規表現フォールバックパーサーは削除されました。
+> **前提:** `python-hcl2` と `pyyaml` が必須です（`pip install -r requirements.txt`）。
+> `hcl2` が未インストールの場合はインポート時点でエラーを出力して終了します。
 
 ### 2-1: ファイル一覧の取得
 
@@ -91,273 +171,181 @@ tf_path = Path(terraform_dir)
 tf_files = sorted(tf_path.glob("*.tf"))
 ```
 
-`Path.glob("*.tf")` で対象ディレクトリ内の全 `.tf` ファイルを列挙し、ファイル名でソートします。
+ディレクトリ**直下**の `.tf` ファイルをアルファベット順で列挙します。サブディレクトリ（`modules/` 等）は対象外です。
 
----
-
-### 2-2: 変数デフォルト値の収集
+### 2-2: 変数デフォルト値の収集（Pass 1）
 
 ```python
 for f in tf_files:
-    parsed = _load_hcl2(f)
+    parsed = hcl2.load(open(f))
     for block in parsed.get("variable", []):
-        for raw_var_name, var_cfg in block.items():
-            var_name = _strip_q(raw_var_name)   # 引用符を除去
+        for var_name, var_cfg in block.items():
             if "default" in var_cfg:
-                variables[var_name] = var_cfg["default"]
+                variables[_strip_q(var_name)] = var_cfg["default"]
 ```
 
-全 `.tf` ファイルを走査し、`variables.tf` の `variable` ブロックから `default` 値を収集します。
+`variables.tf` の `variable` ブロックから `default` 値を先に収集します。
 
-例：`variables.tf` に `variable "vpc_cidr" { default = "10.0.0.0/16" }` があれば
-→ `variables["vpc_cidr"] = "10.0.0.0/16"` として保存されます。
+```
+variable "instance_type" { default = "t3.micro" }
+→ variables["instance_type"] = "t3.micro"
+```
 
----
+変数収集を先に行うことで、定義ファイルの順序に関係なく `var.xxx` を解決できます。
 
-### 2-3: リソースブロックの収集
+### 2-3: リソースブロックの収集（Pass 2）
 
 ```python
 for f in tf_files:
-    parsed = _load_hcl2(f)
+    parsed = hcl2.load(open(f))
     _merge_resources(parsed, resources)
 ```
 
-全ファイルをもう一度走査し、`resource` ブロックを `resources` 辞書に統合します。
-
-**`_merge_resources`**
+**`_merge_resources` の処理:**
 ```python
 for block in parsed.get("resource", []):
     for raw_rtype, instances in block.items():
-        rtype = _strip_q(raw_rtype)         # 例: '"aws_db_instance"' → 'aws_db_instance'
+        rtype = _strip_q(raw_rtype)          # '"aws_instance"' → 'aws_instance'
         for raw_name, cfg in instances.items():
-            name = _strip_q(raw_name)       # 例: '"zabbix"' → 'zabbix'
+            name = _strip_q(raw_name)        # '"web"' → 'web'
             resources[rtype][name] = _flatten_config(cfg)
 ```
 
-python-hcl2 はリソースタイプ名・リソース名のキーに HCL の引用符 `"` を含めて返すため、`_strip_q()` で除去します。
+python-hcl2 はキー名に HCL の引用符 `"` を含めて返す場合があります。`_strip_q` で除去します。
 
-**`_flatten_config`**
+**`_flatten_config` — リスト/辞書の正規化:**
 ```python
 def _flatten_config(cfg):
     if isinstance(cfg, list):
-        return cfg[0] if cfg else {}   # リストで返ってきた場合は最初の要素を使う
+        return cfg[0] if cfg and isinstance(cfg[0], dict) else {}
     return cfg if isinstance(cfg, dict) else {}
 ```
+python-hcl2 はブロックをリストで返すことがあります。先頭要素（辞書）を取り出して平坦化します。
 
-python-hcl2 はブロックをリストとして返すことがあるため、最初の要素（辞書）を取り出して平坦化します。
-
-この時点での `resources` の構造：
+この時点での `resources` 構造:
 ```python
 {
-  "aws_db_instance": {
-    "zabbix": {
-      "multi_az": False,
-      "deletion_protection": False,
-      "skip_final_snapshot": True,
-      ...
-    }
-  },
-  "aws_instance": {
-    "zabbix_server": { ... },
-    "monitored_target": { ... }
-  },
-  ...
+    "aws_instance": {
+        "web": {
+            "instance_type": "t3.micro",
+            "monitoring": True,
+            "metadata_options": {"http_tokens": "required"},
+            ...
+        }
+    },
+    "aws_db_instance": {
+        "main": {"multi_az": False, "deletion_protection": False, ...}
+    },
+    ...
 }
 ```
 
----
-
-### 2-4: 引用符の除去（`_strip_q` と `_unquote`）
-
-**`_strip_q`** — キー用
-```python
-def _strip_q(s):
-    return s.strip('"').strip("'")
-# '"aws_db_instance"' → 'aws_db_instance'
-```
-
-**`_unquote`** — 値用
-```python
-def _unquote(s):
-    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-        inner = s[1:-1]
-        if '"' not in inner:    # 内側にさらに " がなければ単純な文字列リテラル
-            return inner
-    return s
-# '"required"' → 'required'
-# '"gp3"'      → 'gp3'
-# '"ALL"'      → 'ALL'
-```
-
-python-hcl2 は文字列値にも HCL の引用符を残す場合があります。
-両方の関数で除去することで、ルールの `check` 関数が期待する Python 文字列と一致するようにします。
-
----
-
-### 2-5: var.X 参照の解決（`_resolve`）
+### 2-4: `var.X` 参照の解決
 
 ```python
 _VAR_RE = re.compile(r'\$\{var\.([^}]+)\}|(?<!["\w])var\.(\w+)(?!["\w])')
 
-def _resolve(obj, variables):
-    if isinstance(obj, str):
-        obj = _unquote(obj)                  # まず引用符を除去
-        def _replace(m):
-            vname = m.group(1) or m.group(2)
-            return str(variables.get(vname, m.group(0)))
-        return _VAR_RE.sub(_replace, obj)    # var.X を実際の値に置換
-    if isinstance(obj, dict):
-        return {k: _resolve(v, variables) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_resolve(item, variables) for item in obj]
-    return obj
+resources = _resolve(resources, variables)
 ```
 
-辞書・リスト・文字列を再帰的に走査し、`${var.vpc_cidr}` や `var.vpc_cidr` を変数デフォルト値で置換します。
+`_resolve` は辞書・リスト・文字列を**再帰的に**走査して `var.xxx` を置換します:
 
-例：
 ```
-"${var.vpc_cidr}"  →  "10.0.0.0/16"
-var.project_name   →  "zabbix"
+instance_type = var.instance_type  →  "t3.micro"
+cidr_block    = "${var.vpc_cidr}"  →  "10.0.0.0/16"
 ```
+
+変数が定義されていない場合は `var.xxx` のまま残ります（ルールが正しく評価されない場合があります）。
 
 ---
 
 ## ステップ3 — 静的ルールチェック（`evaluator.py`）
 
-### 3-1: ルールの取得
+### 3-1: リソースタイプごとのルール取得
 
 ```python
 for rtype, instances in resources.items():
     rules = TERRAFORM_RULES.get(rtype, [])
     if not rules:
-        continue    # ルール定義がないリソースはスキップ
+        continue
 ```
 
-`TERRAFORM_RULES`（`reference.py`）から、リソースタイプに対応するルールリストを取得します。
+`TERRAFORM_RULES` にないリソースタイプ（`random_string`, `aws_codestarconnections_connection` 等）はスキップします。
 
----
-
-### 3-2: check() の実行
+### 3-2: `check(config)` の実行
 
 ```python
 for rname, config in instances.items():
+    result.resources_checked += 1
     for rule in rules:
-        passed = rule["check"](config)
+        result.rules_checked += 1
+        try:
+            passed = rule["check"](config)
+        except Exception:
+            passed = True   # クラッシュは偽陰性より偽陽性を防ぐ
 ```
 
-各ルールが持つ `check` は lambda 関数です。
-パース済み設定辞書 `config` を受け取り、合格なら `True`、違反なら `False` を返します。
+`check` は `True`（合格）または `False`（違反）を返す関数です。
 
-**ルール定義の例（`reference.py` RDS-001）**
+**DSL 由来のチェック（シンプル）:**
 ```python
-{
-    "id": "RDS-001",
-    "severity": "HIGH",
-    "check": lambda c: c.get("multi_az") is True,
-    # ↑ config["multi_az"] が True でないと False（＝違反）を返す
+# RDS-001: lambda c: c.get("multi_az") is True
+config = {"multi_az": False, ...}
+passed = rule["check"](config)  # → False（違反）
+```
+
+**`checks.py` 由来のチェック（複雑）:**
+```python
+# SG-001: sg_no_admin_ports_open
+config = {
+    "ingress": [{"from_port": 22, "to_port": 22,
+                 "cidr_blocks": ["0.0.0.0/0"]}]
 }
+passed = rule["check"](config)  # → False（SSH が全開放）
 ```
 
-**ネストブロックへのアクセス（`_block` ヘルパー）**
+**ネストブロックへのアクセス（`_block` ヘルパー）:**
 ```python
-def _block(config, key):
-    val = config.get(key, {})
-    if isinstance(val, list):
-        return val[0] if val else {}
-    return val if isinstance(val, dict) else {}
-
-# 使用例（EC2-001）:
-# _block(c, "metadata_options").get("http_tokens") == "required"
-# → metadata_options ブロック（リストの場合も安全）から http_tokens を取得
+# EC2-001 のチェック内部
+_block(config, "metadata_options").get("http_tokens") == "required"
+# python-hcl2 が {"metadata_options": [{"http_tokens": "required"}]} と返しても
+# _block が先頭要素を取り出して安全にアクセスできる
 ```
-
----
 
 ### 3-3 & 3-4: Finding の記録とスコア減点
 
 ```python
 if not passed:
     result.add(Finding(
-        rule_id       = rule["id"],
-        severity      = rule["severity"],
-        resource_type = rtype,
-        resource_name = rname,
-        message       = rule["message"],
-        recommendation= rule["recommendation"],
-        source        = "static",
+        rule_id=rule["id"],
+        severity=rule["severity"],
+        resource_type=rtype,
+        resource_name=rname,
+        description=rule["description"],
+        message=rule["message"],
+        recommendation=rule["recommendation"],
     ))
 ```
 
-`result.add()` 内でスコアを減点します：
 ```python
-def add(self, finding):
+def add(self, finding: Finding):
     self.findings.append(finding)
-    self.score = max(0, self.score - SEVERITY_WEIGHTS[finding.severity])
-    # CRITICAL:-15  HIGH:-10  MEDIUM:-5  LOW:-2
+    self.score = max(0, self.score - SEVERITY_WEIGHTS.get(finding.severity, 0))
 ```
 
-`max(0, ...)` によりスコアは 0 未満にはなりません。
+減点表:
+```
+CRITICAL: -15  HIGH: -10  MEDIUM: -5  LOW: -2  INFO: 0
+```
+`max(0, ...)` でスコアは 0 未満になりません。
 
 ---
 
-## ステップ4 — AWS 実環境照合（`evaluator.py`、`--live` 時のみ）
-
-### 4-1: boto3 セッションの作成と認証確認
-
-```python
-session = boto3.Session(region_name=region, profile_name=profile)
-sts = session.client("sts")
-identity = sts.get_caller_identity()   # 認証情報のテスト
-```
-
-`sts:GetCallerIdentity` を呼び出して AWS 接続を確認します。失敗した場合は実環境チェック全体をスキップします。
-
----
-
-### 4-2 & 4-3: サービスごとの実環境チェック
-
-各チェック関数は同じパターンで動作します。
-
-```
-① AWS API で全リソースを取得
-② Terraform 定義のリソースと名前で突合
-③ 設定値を比較して不備があれば Finding を追加（source="live"）
-```
-
-| 関数名 | AWS API | 突合キー |
-|---|---|---|
-| `_check_ec2_live` | `describe_instances` | Name タグ |
-| `_check_rds_live` | `describe_db_instances` | `identifier` 属性 |
-| `_check_alb_live` | `describe_load_balancers` | `name` 属性 |
-| `_check_sg_live` | `describe_security_groups` | `name` 属性 |
-| `_check_cloudtrail_live` | `describe_trails` | — |
-| `_check_guardduty_live` | `list_detectors` | — |
-| `_check_s3_live` | `list_buckets` + `get_public_access_block` | `bucket` 属性 |
-
-**例: RDS 実環境チェック**
-```python
-rds = session.client("rds")
-resp = rds.describe_db_instances()
-live_dbs = {db["DBInstanceIdentifier"]: db for db in resp["DBInstances"]}
-
-for _name, _cfg in tf_dbs.items():
-    identifier = _cfg.get("identifier", _name)
-    live = live_dbs.get(identifier)      # 同名の実 RDS を探す
-    if live is None:
-        continue                         # まだデプロイされていない場合はスキップ
-
-    if not live.get("MultiAZ"):          # 実 RDS の MultiAZ フラグを確認
-        result.add(Finding(rule_id="RDS-001-LIVE", ...))
-```
-
----
-
-## ステップ5 — 重大度フィルタリング（`main.py`）
+## ステップ4 — 重大度フィルタリング（`main.py`）
 
 ```python
 severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
-min_idx = severity_order.index(args.min_severity)   # 例: "HIGH" → index 1
+min_idx = severity_order.index(args.min_severity)  # "HIGH" → 1
 
 result.findings = [
     f for f in result.findings
@@ -365,36 +353,42 @@ result.findings = [
 ]
 ```
 
-`--min-severity HIGH` を指定すると、index が 1 以下（CRITICAL=0, HIGH=1）の Finding だけが残ります。
+`--min-severity HIGH` を指定すると index が 1 以下（CRITICAL=0, HIGH=1）のみ残ります。
+**スコアはフィルタリング前の全 Finding に基づいて計算済みなので変わりません。**
 
 ---
 
-## ステップ6 — テキストレポート生成（`evaluator.py`）
+## ステップ5 — テキストレポート生成（`evaluator.py`）
 
 ```python
 def generate_report(result, resources, variables):
     lines = []
-    # ヘッダー（スコア・集計）
-    lines.append(f"Score : {result.score}/100  {_score_label(result.score)}")
 
-    # 重大度ごとに Finding を列挙
+    # ヘッダー: リソース数・ルール数・スコア
+    lines.append(f"  Score       : {result.score}/100  {_score_label(result.score)}")
+
+    # 重大度ごとのサマリー件数
+    for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
+        cnt = len(result.by_severity(sev))
+        if cnt:
+            lines.append(f"  {sev:<10} {cnt}")
+
+    # 重大度の高い順に全 Finding
     for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
         for f in result.by_severity(sev):
-            tag = "[LIVE]" if f.source == "live" else "[STATIC]"
-            lines.append(f"{tag} {f.rule_id}  {f.resource_type}.{f.resource_name}")
-            lines.append(f"  Problem : {f.message}")
-            lines.append(f"  Fix     : {f.recommendation}")
+            lines.append(f"  {f.rule_id}  {f.resource_type}.{f.resource_name}")
+            lines.append(f"    Problem : {f.message}")
+            lines.append(f"    Fix     : {f.recommendation}")
 
-    # 実際の .tf 内容を参照して合格項目を一覧表示
+    # 合格している設定を [OK] で表示
     for item in _detect_good_practices(resources, variables):
-        lines.append(f"[OK] {item}")
+        lines.append(f"  [OK] {item}")
 
     return "\n".join(lines)
 ```
 
-**スコアラベルの判定**
 ```python
-def _score_label(score):
+def _score_label(score: int) -> str:
     if score >= 90: return "(EXCELLENT)"
     if score >= 75: return "(GOOD)"
     if score >= 60: return "(FAIR)"
@@ -402,14 +396,14 @@ def _score_label(score):
     return "(CRITICAL ISSUES)"
 ```
 
-出力はバイト列として書き出すことで、Windows の CP932 ターミナルでも UTF-8 テキストを正しく表示します：
+出力は UTF-8 バイト列として書き出します（Windows の CP932 ターミナルでの文字化け防止）:
 ```python
 sys.stdout.buffer.write((report_text + "\n").encode("utf-8", errors="replace"))
 ```
 
 ---
 
-## ステップ7a — JSON 出力（`main.py`、`--output` 指定時）
+## ステップ6a — JSON 出力（`main.py`、`--output` 指定時）
 
 ```python
 if args.output:
@@ -417,85 +411,126 @@ if args.output:
         json.dump(result.to_dict(), fh, ensure_ascii=False, indent=2)
 ```
 
-`result.to_dict()` が返す構造：
-```python
+`to_dict()` の出力構造:
+```json
 {
-  "score": 9,
-  "resources_checked": 65,
-  "rules_checked": 137,
-  "live_check_enabled": False,
-  "findings_count": {"CRITICAL": 0, "HIGH": 6, "MEDIUM": 9, "LOW": 11},
+  "score": 52,
+  "resources_checked": 10,
+  "rules_checked": 32,
+  "findings_count": {"CRITICAL": 0, "HIGH": 2, "MEDIUM": 4, "LOW": 4, "INFO": 0},
   "findings": [
     {
-      "rule_id": "RDS-001",
+      "rule_id": "LC-002",
       "severity": "HIGH",
-      "resource_type": "aws_db_instance",
-      "resource_name": "zabbix",
-      "message": "multi_az = false ...",
-      "recommendation": "Set multi_az = true",
-      "source": "static"
-    },
-    ...
+      "resource_type": "aws_launch_configuration",
+      "resource_name": "example",
+      "description": "Root EBS volume must be encrypted at rest",
+      "message": "Root EBS volume in launch configuration is not encrypted.",
+      "recommendation": "Set root_block_device { encrypted = true }"
+    }
   ]
 }
 ```
 
 ---
 
-## ステップ7b — HTML レポート生成（`evaluator.py`、`--output-html` 指定時）
+## ステップ6b — HTML レポート生成（`evaluator.py`、`--output-html` 指定時）
 
+外部ライブラリを使わず Python の文字列テンプレートだけで完全な HTML を生成します。
+
+**SVG スコアゲージの計算:**
 ```python
-def generate_html_report(result, resources, variables, tf_dir=""):
+pct = result.score / 100        # 0.52
+r = 54                          # 円の半径
+circumference = 2 * 3.14159 * r # ≈ 339.3
+dash = pct * circumference      # 塗りつぶす弧の長さ
+gap  = circumference - dash     # 空白の弧の長さ
+
+# SVG の stroke-dasharray で表現
+# stroke-dasharray="176.4 162.9" → 176.4px 塗りつぶし、残りは空白
+```
+
+**重大度カードの生成:**
+```python
+sev_colors = {
+    "CRITICAL": ("#b91c1c", "#fee2e2"),  # (前景色, 背景色)
+    "HIGH":     ("#c2410c", "#ffedd5"),
     ...
+}
+for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+    fg, bg = sev_colors[sev]
+    cnt = len(result.by_severity(sev))
+    card_html += f'<div class="card" style="background:{bg}"><div class="card-count" style="color:{fg}">{cnt}</div>...'
 ```
 
-外部ライブラリを一切使わず、Python の文字列テンプレートだけで HTML を生成します。
-`resources` を受け取ることで、HTML の Good Practices セクションも実際の .tf 内容から動的に生成されます。
-
-**含まれるセクション**
-
-| セクション | 実装方法 |
-|---|---|
-| スコアゲージ | SVG 円弧（`stroke-dasharray` で進捗を表現） |
-| 重大度カード | インライン CSS + 重大度別の色定義 |
-| Findings テーブル | `<table>` に全 Finding を出力、重大度バッジ付き |
-| WAF Pillar バーチャート | `reference.TERRAFORM_RULES` を集計して SVG `<rect>` で描画 |
-| Good Practices | グリッドレイアウトのリスト |
-
-**STATIC / LIVE の区別**
+**Findings テーブルの生成:**
 ```python
-tag = "LIVE" if f.source == "live" else "STATIC"
-tag_color = "#7c3aed" if f.source == "live" else "#374151"
+for f in result.findings:
+    fg, bg = sev_colors.get(f.severity, ("#374151", "#f3f4f6"))
+    rows_html += f"""
+        <tr>
+          <td><span class="badge" style="background:{bg};color:{fg}">{f.severity}</span></td>
+          <td><code>{f.rule_id}</code></td>
+          <td><code>{f.resource_type}.<strong>{f.resource_name}</strong></code></td>
+          <td>{f.message}</td>
+          <td>{f.recommendation}</td>
+        </tr>"""
 ```
 
-`[LIVE]` は紫色、`[STATIC]` はグレーで表示されます。
+**WAF Pillar バーチャートの生成:**
+```python
+from reference import TERRAFORM_RULES
+pillar_counts = {}
+for rtype, rules in TERRAFORM_RULES.items():
+    for rule in rules:
+        p = rule.get("pillar", "OTHER")
+        pillar_counts[p] = pillar_counts.get(p, 0) + 1
+
+# 各柱のルール数を SVG <rect> で描画
+for pillar, cnt in sorted(pillar_counts.items()):
+    w = int(cnt / max_val * bar_width)
+    bars += f'<rect x="45" y="{y}" width="{w}" height="16" .../>'
+```
 
 ---
 
-## ステップ8 — 終了コード（`main.py`）
+## ステップ7 — 終了コード（`main.py`）
 
 ```python
 critical_high = len(result.by_severity("CRITICAL")) + len(result.by_severity("HIGH"))
 sys.exit(1 if critical_high > 0 else 0)
 ```
 
-CRITICAL または HIGH の問題が 1 件以上あれば終了コード `1` で終了します。
-CI/CD パイプライン（GitHub Actions 等）でこの終了コードを受けてジョブを失敗させることができます。
+CRITICAL または HIGH の問題が1件以上あれば終了コード `1`。CI/CD でこの値を受けてジョブを失敗させます。
+
+```yaml
+# GitHub Actions の例
+- name: Terraform Best-Practice Check
+  run: python terraform_evaluator/main.py --dir terraform --min-severity HIGH
+  # HIGH 以上があると exit 1 → ジョブ失敗
+```
 
 ---
 
-## データの変換まとめ
+## データ変換フロー
 
 ```
+rules/rules.yml（YAML テキスト）
+    ↓ yaml.safe_load()
+Python dict（カテゴリ → リソースタイプ → ルールリスト）
+    ↓ _resolve_check()
+check: <callable>（DSL または checks.py 関数）
+    ↓ TERRAFORM_RULES として保持
+
 .tf ファイル（HCL テキスト）
     ↓ hcl2.load()
-Python dict（ raw、引用符あり ）
-    ↓ _strip_q() / _unquote()
-Python dict（ クリーン、引用符なし ）
+Python dict（raw、引用符あり）
+    ↓ _strip_q() / _flatten_config()
+Python dict（クリーン、型正規化済み）
     ↓ _resolve()
-Python dict（ 変数参照を実際の値に置換済み ）
+Python dict（var.X → 実際の値に置換済み）
     ↓ evaluate_static()
-List[Finding]（ 違反一覧 ）
+EvaluationResult（score, List[Finding]）
     ↓ generate_report()        → ターミナル出力
     ↓ to_dict() + json.dump()  → JSON ファイル
     ↓ generate_html_report()   → HTML ファイル
@@ -508,6 +543,10 @@ List[Finding]（ 違反一覧 ）
 | ファイル | 担当 | 主な関数・定義 |
 |---|---|---|
 | `main.py` | 実行制御・CLI | `main()` |
-| `hcl_parser.py` | .tf 読み込み・変数解決 | `parse_tf_directory()`, `_resolve()`, `_strip_q()`, `_unquote()` |
-| `reference.py` | ルール定義（188件 / 72 resource type） | `TERRAFORM_RULES`, `_block()`, `_blocks()`, `_int()` |
-| `evaluator.py` | 評価・AWS 照合・レポート | `evaluate_static()`, `compare_live()`, `generate_report()`, `generate_html_report()`, `_detect_good_practices()` |
+| `helpers.py` | ブロックアクセスヘルパー | `_block()`, `_blocks()`, `_int()` |
+| `rule_loader.py` | YAML 読み込み・DSL 解釈 | `_resolve_check()`, `load_rules()` |
+| `rules/rules.yml` | ルール定義（188件 / 72 リソースタイプ） | カテゴリ別 YAML |
+| `checks.py` | 複雑なチェック関数（約 60 個） | `sg_no_admin_ports_open()` 等 |
+| `reference.py` | 公開 API の re-export | `TERRAFORM_RULES`, `SEVERITY_WEIGHTS` |
+| `evaluator.py` | 評価・レポート生成 | `evaluate_static()`, `generate_report()`, `generate_html_report()` |
+| `hcl_parser.py` | `.tf` 読み込み・変数解決 | `parse_tf_directory()`, `_resolve()` |
