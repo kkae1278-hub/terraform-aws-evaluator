@@ -148,6 +148,58 @@ def suggest_rule_id(data: dict, resource_type: str) -> str:
 # Check spec builder
 # ---------------------------------------------------------------------------
 
+def _registry_url(resource_type: str) -> str:
+    """Return the Terraform Registry docs URL for a given resource type."""
+    # aws_db_instance -> db_instance
+    name = resource_type.removeprefix("aws_")
+    return f"https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/{name}"
+
+
+def _print_check_reference(data: dict, resource_type: str) -> None:
+    """
+    Before asking for check logic, show:
+      1. Where to find available field names (Terraform Registry URL)
+      2. Existing rules for the same resource as concrete examples
+    """
+    print()
+    print("  --- How to find field names ---")
+    print(f"  Terraform Registry (Argument Reference section):")
+    print(f"    {_registry_url(resource_type)}")
+    print()
+    print("  Field names in check: correspond directly to Terraform resource")
+    print("  arguments (e.g. 'encrypted', 'multi_az', 'deletion_protection').")
+    print("  Nested blocks use block: <block_name> + field: <arg_inside_block>.")
+    print("  For complex logic (loops, multi-condition), use op: fn and add a")
+    print("  Python function to checks.py.")
+
+    # Show existing rules for this resource as examples
+    existing = []
+    for cat_resources in data.values():
+        if isinstance(cat_resources, dict):
+            existing = cat_resources.get(resource_type, [])
+            if existing:
+                break
+
+    if existing:
+        print()
+        print(f"  Existing rules for {resource_type} (for reference):")
+        for rule in existing:
+            check = rule.get("check", {})
+            op = check.get("op", "?")
+            detail_parts = []
+            if "block" in check:
+                detail_parts.append(f"block={check['block']}")
+            if "field" in check:
+                detail_parts.append(f"field={check['field']}")
+            if "value" in check:
+                detail_parts.append(f"value={check['value']}")
+            if "name" in check:
+                detail_parts.append(f"fn={check['name']}")
+            detail = ", ".join(detail_parts)
+            print(f"    {rule['id']:12s} op={op:<16s} {detail}")
+    print()
+
+
 def build_check_spec() -> dict:
     print()
     print("  --- Check definition ---")
@@ -330,6 +382,7 @@ def main():
 
     print()
     print("Step 3: Check logic")
+    _print_check_reference(data, resource_type)
     check_spec = build_check_spec()
 
     rule = {
