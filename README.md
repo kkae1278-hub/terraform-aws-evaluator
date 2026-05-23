@@ -112,7 +112,7 @@ python main.py --dir path/to/terraform --min-severity HIGH
 | HIGH | 10 点 | 可用性・機密性に直接影響する問題 |
 | MEDIUM | 5 点 | ベストプラクティスからの逸脱 |
 | LOW | 2 点 | 推奨設定の不足 |
-| INFO | 0 点 | 参考情報 |
+| INFO | 0 点 | 参考情報（自動判定不可・要手動確認） |
 
 | スコア | 評価 |
 |---|---|
@@ -121,6 +121,68 @@ python main.py --dir path/to/terraform --min-severity HIGH
 | 60 〜 74 | FAIR |
 | 40 〜 59 | POOR |
 | 0 〜 39 | CRITICAL ISSUES |
+
+---
+
+## 重大度の判別基準
+
+新しいルールを追加する際は、以下の基準を参考に重大度を選択してください。
+
+### CRITICAL
+
+**「現状の設定のまま攻撃・情報漏洩が成立する」** 状態。外部からの直接アクセスや機密データの公開が即座に起こりうる場合に適用します。
+
+| 判断基準 | 具体例 |
+|---|---|
+| 機密データ・リソースがインターネットに直接公開されている | S3 バケットのパブリック公開、RDS の `publicly_accessible = true` |
+| 管理ポートが全 IP に開放されている | SG の ingress で SSH（22）/ RDP（3389）が `0.0.0.0/0` に開放 |
+| 認証・認可が完全に無効化されている | IAM ポリシーで `"Principal": "*"` かつ `"Action": "*"` |
+| 保管データが一切暗号化されていない（機密性の高いリソース） | EBS ルートボリュームの暗号化なし、Secrets Manager の暗号化なし |
+
+### HIGH
+
+**「直接の攻撃経路はないが、障害・インシデント発生時の影響が甚大」** な状態。可用性の喪失・データ消失・権限昇格につながる設定不備に適用します。
+
+| 判断基準 | 具体例 |
+|---|---|
+| 単一障害点になっており、AZ 障害でサービス全断する | RDS `multi_az = false`、NAT Gateway 単一 AZ |
+| 削除保護がなく、誤操作でデータが永久消失する | `deletion_protection = false`、`skip_final_snapshot = true` |
+| 通信が平文であり、盗聴・改ざんが可能 | ALB の HTTP-only（HTTPS なし）、DB 接続の SSL 未強制 |
+| IAM 権限が過剰で、侵害時の横展開リスクが高い | ロールに `*` アクション、信頼ポリシーで `"AWS": "*"` |
+| セキュリティ設定の中核機能が無効 | IMDSv1 許可（`http_tokens = optional`）、VPC Flow Logs なし |
+
+### MEDIUM
+
+**「直接のリスクは低いが、AWS ベストプラクティスや Well-Architected Framework から外れている」** 状態。攻撃難易度が高い・影響範囲が限定的・代替手段が存在するケースに適用します。
+
+| 判断基準 | 具体例 |
+|---|---|
+| CMK ではなく AWS マネージドキーを使用している | CloudTrail / CloudWatch Logs / SNS の KMS 暗号化なし |
+| 監査・可観測性の設定が不足している | CloudTrail の S3 未出力、RDS Enhanced Monitoring 無効 |
+| セキュリティ強化オプションが未設定（デフォルトが安全側でない） | ALB `drop_invalid_header_fields = false`、`enable_deletion_protection = false` |
+| バックアップ・復旧設定が不十分 | RDS バックアップ保持 7 日未満、`force_destroy = true` |
+| 詳細モニタリング・パフォーマンス分析が無効 | RDS Performance Insights 無効、EC2 詳細モニタリング無効 |
+
+### LOW
+
+**「機能・セキュリティへの影響はほぼないが、運用品質・コンプライアンス上の推奨設定が欠けている」** 状態。
+
+| 判断基準 | 具体例 |
+|---|---|
+| リソースの識別・監査に必要なメタデータが不足 | IAM Role に `description` なし、タグ未設定 |
+| 障害時の通知・ロギングが不完全 | SNS の `redrive_policy` なし、アクセスログ未設定 |
+| 冗長化・自動復旧のオプションが未設定（単体では機能する） | EIP のタグなし、EBS `delete_on_termination` の明示指定なし |
+| セキュリティ設定の意図が不明確（機能的問題はない） | VPC Endpoint SG に egress ルールなし |
+
+### INFO
+
+**「自動判定が不可能、または文脈依存で正誤が決まる」** 設定。違反としてカウントせず、確認を促す情報として表示します。
+
+| 判断基準 | 具体例 |
+|---|---|
+| 構成の意図によって正しい値が異なる | VPC-attached Lambda のセキュリティグループ適切性 |
+| 静的解析では判定できない実行時の設定 | ASG のヘルスチェック猶予期間の妥当性 |
+| EIP の割り当て先が別リソース参照で判定不可 | `aws_eip` が NAT Gateway に割り当て済みかどうか |
 
 ---
 
