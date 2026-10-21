@@ -36,26 +36,30 @@ def parse_tf_directory(terraform_dir: str) -> Tuple[Dict[str, Dict], Dict[str, A
     variables: Dict[str, Any] = {}
     resources: Dict[str, Dict] = {}
 
-    # Pass 1 - collect variable defaults from all files
+    # Parse every file up front. A file that cannot be parsed must fail the run:
+    # silently skipping it would evaluate an empty set and report a perfect score.
+    parsed_files = []
+    errors = []
     for f in tf_files:
         try:
-            parsed = _load_hcl2(f)
-            for block in parsed.get("variable", []):
-                for raw_var_name, var_cfg in block.items():
-                    var_name = _strip_q(raw_var_name)
-                    cfg = var_cfg[0] if isinstance(var_cfg, list) and var_cfg else var_cfg
-                    if isinstance(cfg, dict) and "default" in cfg:
-                        variables[var_name] = cfg["default"]
+            parsed_files.append(_load_hcl2(f))
         except Exception as exc:
-            print(f"  [WARNING] variables pass - skipping {f.name}: {exc}")
+            errors.append(f"{f.name}: {exc}")
+    if errors:
+        raise ValueError("Failed to parse Terraform file(s):\n  " + "\n  ".join(errors))
+
+    # Pass 1 - collect variable defaults from all files
+    for parsed in parsed_files:
+        for block in parsed.get("variable", []):
+            for raw_var_name, var_cfg in block.items():
+                var_name = _strip_q(raw_var_name)
+                cfg = var_cfg[0] if isinstance(var_cfg, list) and var_cfg else var_cfg
+                if isinstance(cfg, dict) and "default" in cfg:
+                    variables[var_name] = cfg["default"]
 
     # Pass 2 - collect resource blocks from all files
-    for f in tf_files:
-        try:
-            parsed = _load_hcl2(f)
-            _merge_resources(parsed, resources)
-        except Exception as exc:
-            print(f"  [WARNING] resources pass - skipping {f.name}: {exc}")
+    for parsed in parsed_files:
+        _merge_resources(parsed, resources)
 
     # Resolve var.X references using collected defaults
     resources = _resolve(resources, variables)

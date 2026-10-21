@@ -151,7 +151,7 @@ def suggest_rule_id(data: dict, resource_type: str) -> str:
 def _registry_url(resource_type: str) -> str:
     """Return the Terraform Registry docs URL for a given resource type."""
     # aws_db_instance -> db_instance
-    name = resource_type.removeprefix("aws_")
+    name = resource_type[len("aws_"):] if resource_type.startswith("aws_") else resource_type
     return f"https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/{name}"
 
 

@@ -2,14 +2,14 @@
 
 ![CI](https://github.com/kkae1278-hub/terraform-aws-evaluator/actions/workflows/ci.yml/badge.svg)
 
-Terraform の `.tf` ファイルを静的解析し、AWS のベストプラクティスと照合して問題点をスコアリングするツールです。生成 AI は使用せず、ルールベースの評価エンジンと boto3 による実環境比較で動作します。
+Terraform の `.tf` ファイルを静的解析し、AWS のベストプラクティスと照合して問題点をスコアリングするツールです。生成 AI は使用せず、ルールベースの評価エンジンで動作します（AWS への接続は不要です）。
 
 ---
 
 ## 構成ファイル
 
 ```
-terraform_evaluator/
+terraform-aws-evaluator/
 ├── main.py                        # エントリーポイント（CLI 引数解析・実行制御）
 ├── hcl_parser.py                  # HCL2 パーサー（.tf ファイルの読み込みと変数解決）
 ├── evaluator.py                   # 評価エンジン（静的チェック・レポート生成）
@@ -22,9 +22,10 @@ terraform_evaluator/
 ├── requirements.txt               # 実行依存ライブラリ
 ├── requirements-dev.txt           # 開発・テスト用依存ライブラリ
 ├── scripts/
+│   ├── add_rule.py                # 対話形式でルールを追加するウィザード
 │   └── count_rules.py             # ルール数・リソースタイプ数の集計ユーティリティ
 ├── tests/
-│   ├── test_rules.py              # pytest テストスイート（42 件）
+│   ├── test_rules.py              # pytest テストスイート（43 件）
 │   └── fixtures/
 │       ├── sample_good/main.tf    # 正しく設定されたリソース群（テスト用）
 │       └── sample_bad/main.tf     # 意図的に設定ミスしたリソース群（テスト用）
@@ -44,7 +45,8 @@ terraform_evaluator/
 ## セットアップ
 
 ```bash
-cd terraform_evaluator
+git clone https://github.com/kkae1278-hub/terraform-aws-evaluator.git
+cd terraform-aws-evaluator
 
 # 実行環境
 pip install -r requirements.txt
@@ -211,7 +213,7 @@ AWS Well-Architected Framework の 5 つの柱（SEC / REL / OPS / PERF / COST�
 ## テスト実行
 
 ```bash
-# ユニットテスト（42 件）
+# ユニットテスト（43 件）
 pytest tests/ -v
 
 # ルール数・リソースタイプ数の確認
@@ -223,7 +225,7 @@ python scripts/count_rules.py
 ## CI/CD への組み込み例
 
 ```yaml
-# GitHub Actions の例
+# GitHub Actions の例（本ツールを対象リポジトリの terraform_evaluator/ に配置した場合）
 - name: Terraform Best-Practice Check
   run: |
     pip install -r terraform_evaluator/requirements.txt
@@ -253,4 +255,5 @@ Security Hub と内容が重複する部分はありますが、**デプロイ�
 |---|---|
 | サブディレクトリ非対応 | `parse_tf_directory` はトップレベルの `*.tf` のみ解析。`modules/` 配下は評価対象外 |
 | モジュール呼び出し非対応 | `module "vpc" { ... }` 形式のモジュール参照は評価対象外。直接の `resource` ブロックのみ対象 |
+| 構文エラー | パースできない `.tf` ファイルが 1 つでもあると、エラーを表示して exit code 1 で終了（評価は行わない） |
 | 変数未解決 | `default` のない変数（`.tfvars` で渡す場合）は `var.xxx` のまま残りルールが正しく評価されない場合がある |

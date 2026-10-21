@@ -391,6 +391,13 @@ class TestFixtures:
             f"{[f.rule_id for f in critical_and_high]}"
         )
 
+    def test_unparseable_file_raises(self, tmp_path):
+        from hcl_parser import parse_tf_directory
+        (tmp_path / "ok.tf").write_text('variable "x" {\n  default = "a"\n}\n', encoding="utf-8")
+        (tmp_path / "broken.tf").write_text('resource "aws_instance" "x" { ami = \n', encoding="utf-8")
+        with pytest.raises(ValueError, match="broken.tf"):
+            parse_tf_directory(str(tmp_path))
+
     def test_sample_bad_score_below_good(self):
         good_resources, _ = self._parse_fixture("sample_good")
         bad_resources, _ = self._parse_fixture("sample_bad")

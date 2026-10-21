@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   test:
@@ -20,11 +20,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        working-directory: terraform_evaluator
         run: pip install -r requirements.txt pytest
 
       - name: Run tests
-        working-directory: terraform_evaluator
         run: pytest tests/ -v
 
   evaluate-sample:
@@ -40,23 +38,19 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        working-directory: terraform_evaluator
         run: pip install -r requirements.txt
 
       - name: Evaluate well-configured fixture (expect score >= 80)
-        working-directory: terraform_evaluator
         run: |
           python main.py --dir tests/fixtures/sample_good --min-severity HIGH
           echo "Exit code: $?"
 
       - name: Evaluate misconfigured fixture (expect findings)
-        working-directory: terraform_evaluator
         run: |
           python main.py --dir tests/fixtures/sample_bad --min-severity MEDIUM || true
           echo "Misconfigured fixture scan complete"
 
       - name: Generate HTML report for sample_bad
-        working-directory: terraform_evaluator
         run: python main.py --dir tests/fixtures/sample_bad --output-html /tmp/sample_bad.html
 
       - name: Upload HTML report as artifact
@@ -82,5 +76,4 @@ jobs:
         run: pip install flake8
 
       - name: Lint (errors only, no style enforcement)
-        working-directory: terraform_evaluator
         run: flake8 main.py hcl_parser.py evaluator.py reference.py helpers.py rule_loader.py checks.py --max-line-length=120 --select=E9,F821,F401
