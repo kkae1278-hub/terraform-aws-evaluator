@@ -47,11 +47,17 @@ jobs:
 
       - name: Evaluate misconfigured fixture (expect findings)
         run: |
-          python main.py --dir tests/fixtures/sample_bad --min-severity MEDIUM || true
-          echo "Misconfigured fixture scan complete"
+          status=0
+          python main.py --dir tests/fixtures/sample_bad --min-severity MEDIUM || status=$?
+          echo "Exit code: $status (expected 1: CRITICAL/HIGH findings)"
+          test "$status" -eq 1
 
       - name: Generate HTML report for sample_bad
-        run: python main.py --dir tests/fixtures/sample_bad --output-html /tmp/sample_bad.html
+        run: |
+          status=0
+          python main.py --dir tests/fixtures/sample_bad --output-html /tmp/sample_bad.html || status=$?
+          test "$status" -eq 1
+          test -s /tmp/sample_bad.html
 
       - name: Upload HTML report as artifact
         uses: actions/upload-artifact@v4
